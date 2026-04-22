@@ -171,6 +171,17 @@ pip install -r requirements.txt
 streamlit run demo.py --server.port 8501
 ```
 
+```bash
+# 1. 使用uv
+uv sync
+
+# 2. 激活环境
+source .venv/bin/activate
+
+# 3. 启动
+streamlit run demo.py --server.port 8501
+```
+
 浏览器打开 http://localhost:8501 即可使用。
 
 ---
