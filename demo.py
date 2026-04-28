@@ -97,6 +97,24 @@ def base64_to_image(b64_str):
     except Exception:
         return None
 
+def image_to_jpeg_bytes(image):
+    """将 PIL 图像转换为适合 API 上传的 JPEG 字节。"""
+    has_alpha = image.mode in ("RGBA", "LA") or (
+        image.mode == "P" and "transparency" in image.info
+    )
+
+    if has_alpha:
+        rgba_image = image.convert("RGBA")
+        background = Image.new("RGB", rgba_image.size, (255, 255, 255))
+        background.paste(rgba_image, mask=rgba_image.getchannel("A"))
+        image = background
+    elif image.mode != "RGB":
+        image = image.convert("RGB")
+
+    img_byte_arr = BytesIO()
+    image.save(img_byte_arr, format="JPEG")
+    return img_byte_arr.getvalue()
+
 def create_sample_inputs(method_content, caption, diagram_type="Pipeline", aspect_ratio="16:9", num_copies=10, max_critic_rounds=3):
     """创建多份输入数据副本用于并行处理。"""
     base_input = {
@@ -879,9 +897,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                         with st.spinner(f"正在将图像精修至 {refine_resolution} 分辨率... 这可能需要一分钟。"):
                             try:
                                 # 将 PIL 图像转换为字节
-                                img_byte_arr = BytesIO()
-                                uploaded_image.save(img_byte_arr, format='JPEG')
-                                image_bytes = img_byte_arr.getvalue()
+                                image_bytes = image_to_jpeg_bytes(uploaded_image)
 
                                 # 调用精修 API
                                 refined_bytes, message = asyncio.run(
