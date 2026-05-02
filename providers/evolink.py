@@ -14,11 +14,17 @@ from .base import BaseProvider
 
 
 DEBUG_LOGS = os.getenv("PAPERBANANA_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+TEXT_RETRY_MAX_DELAY = float(os.getenv("PAPERBANANA_AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY", "120"))
+IMAGE_RETRY_MAX_DELAY = float(os.getenv("PAPERBANANA_AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY", "180"))
 
 
 def _debug_log(message: str):
     if DEBUG_LOGS:
         print(message)
+
+
+def _retry_backoff_delay(base_delay: float, attempt: int, max_delay: float) -> float:
+    return min(base_delay * (2 ** attempt), max_delay)
 
 
 class ClientError(Exception):
@@ -307,7 +313,9 @@ class EvolinkProvider(BaseProvider):
                         return [text]
 
                 if attempt < max_attempts - 1:
-                    await asyncio.sleep(retry_delay)
+                    await asyncio.sleep(
+                        _retry_backoff_delay(retry_delay, attempt, TEXT_RETRY_MAX_DELAY)
+                    )
 
             except ClientError as e:
                 # 4xx 客户端错误，立即失败不重试（模型名错误、参数错误等）
@@ -317,7 +325,7 @@ class EvolinkProvider(BaseProvider):
 
             except Exception as e:
                 context_msg = f" ({error_context})" if error_context else ""
-                current_delay = min(retry_delay * (2 ** attempt), 30)
+                current_delay = _retry_backoff_delay(retry_delay, attempt, TEXT_RETRY_MAX_DELAY)
                 if DEBUG_LOGS:
                     print(
                         f"[API Gateway 文本] 第 {attempt + 1} 次尝试失败{context_msg}: {e}。"
@@ -375,7 +383,9 @@ class EvolinkProvider(BaseProvider):
                 if not task_id:
                     print(f"[API Gateway 图像] 创建任务失败，未返回任务 ID")
                     if attempt < max_attempts - 1:
-                        await asyncio.sleep(retry_delay)
+                        await asyncio.sleep(
+                            _retry_backoff_delay(retry_delay, attempt, IMAGE_RETRY_MAX_DELAY)
+                        )
                     continue
 
                 _debug_log(f"[API Gateway 图像] 任务已创建: {task_id}")
@@ -419,7 +429,9 @@ class EvolinkProvider(BaseProvider):
                 context_msg = f" ({error_context})" if error_context else ""
                 print(f"[API Gateway 图像] 第 {attempt + 1} 次尝试未成功{context_msg}")
                 if attempt < max_attempts - 1:
-                    await asyncio.sleep(retry_delay)
+                    await asyncio.sleep(
+                        _retry_backoff_delay(retry_delay, attempt, IMAGE_RETRY_MAX_DELAY)
+                    )
 
             except ClientError as e:
                 # 4xx 客户端错误，立即失败不重试
@@ -429,7 +441,7 @@ class EvolinkProvider(BaseProvider):
 
             except Exception as e:
                 context_msg = f" ({error_context})" if error_context else ""
-                current_delay = min(retry_delay * (2 ** attempt), 60)
+                current_delay = _retry_backoff_delay(retry_delay, attempt, IMAGE_RETRY_MAX_DELAY)
                 if DEBUG_LOGS:
                     print(
                         f"[API Gateway 图像] 第 {attempt + 1} 次尝试失败{context_msg}: {e}。"

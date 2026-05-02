@@ -379,6 +379,35 @@ class TestRequestBuilding:
 # ==================== generation_utils 集成测试 ====================
 
 class TestGenerationUtilsIntegration:
+    def test_auto_retry_defaults_are_more_patient_for_images(self):
+        """Image generation gets more attempts and longer retry delay by default."""
+        from utils import generation_utils
+
+        assert generation_utils.AUTO_TEXT_PROVIDER_ATTEMPTS == 3
+        assert generation_utils.AUTO_TEXT_PROVIDER_RETRY_DELAY == 15
+        assert generation_utils.AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY == 120
+        assert generation_utils.AUTO_IMAGE_PROVIDER_ATTEMPTS == 4
+        assert generation_utils.AUTO_IMAGE_PROVIDER_RETRY_DELAY == 30
+        assert generation_utils.AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY == 180
+
+    def test_retry_backoff_delay_is_exponential_with_cap(self):
+        """Retry delays grow dynamically and stop at the configured cap."""
+        from utils import generation_utils
+
+        assert generation_utils._retry_backoff_delay(30, 0, 180) == 30
+        assert generation_utils._retry_backoff_delay(30, 1, 180) == 60
+        assert generation_utils._retry_backoff_delay(30, 2, 180) == 120
+        assert generation_utils._retry_backoff_delay(30, 3, 180) == 180
+
+    def test_image_model_candidates_fallback_to_gemini(self):
+        """When gpt-image-2 is unstable, auto mode can try the Gemini image model."""
+        from utils import generation_utils
+
+        assert generation_utils._image_model_candidates("gpt-image-2") == [
+            "gpt-image-2",
+            "gemini-3.1-flash-image-preview",
+        ]
+
     def test_gateway_openai_image_size_uses_dimensions(self):
         """gpt-image-* through gateway must use WIDTHxHEIGHT, not ratio strings."""
         from utils import generation_utils

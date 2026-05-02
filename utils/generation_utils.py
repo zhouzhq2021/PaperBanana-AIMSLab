@@ -62,8 +62,27 @@ GATEWAY_PROVIDERS = {"aipaibox", "evolink", "gateway"}
 AUTO_PROVIDER = "auto"
 OPENAI_IMAGE_QUALITIES = {"standard", "hd", "low", "medium", "high", "auto"}
 DEBUG_LOGS = os.getenv("PAPERBANANA_DEBUG", "").lower() in {"1", "true", "yes", "on"}
-AUTO_PROVIDER_ATTEMPTS = int(os.getenv("PAPERBANANA_AUTO_PROVIDER_ATTEMPTS", "2"))
-AUTO_PROVIDER_RETRY_DELAY = float(os.getenv("PAPERBANANA_AUTO_PROVIDER_RETRY_DELAY", "2"))
+AUTO_PROVIDER_ATTEMPTS = int(os.getenv("PAPERBANANA_AUTO_PROVIDER_ATTEMPTS", "3"))
+AUTO_PROVIDER_RETRY_DELAY = float(os.getenv("PAPERBANANA_AUTO_PROVIDER_RETRY_DELAY", "15"))
+AUTO_PROVIDER_RETRY_MAX_DELAY = float(os.getenv("PAPERBANANA_AUTO_PROVIDER_RETRY_MAX_DELAY", "120"))
+AUTO_TEXT_PROVIDER_ATTEMPTS = int(
+    os.getenv("PAPERBANANA_AUTO_TEXT_PROVIDER_ATTEMPTS", str(AUTO_PROVIDER_ATTEMPTS))
+)
+AUTO_TEXT_PROVIDER_RETRY_DELAY = float(
+    os.getenv("PAPERBANANA_AUTO_TEXT_PROVIDER_RETRY_DELAY", str(AUTO_PROVIDER_RETRY_DELAY))
+)
+AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY = float(
+    os.getenv("PAPERBANANA_AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY", str(AUTO_PROVIDER_RETRY_MAX_DELAY))
+)
+AUTO_IMAGE_PROVIDER_ATTEMPTS = int(
+    os.getenv("PAPERBANANA_AUTO_IMAGE_PROVIDER_ATTEMPTS", "4")
+)
+AUTO_IMAGE_PROVIDER_RETRY_DELAY = float(
+    os.getenv("PAPERBANANA_AUTO_IMAGE_PROVIDER_RETRY_DELAY", "30")
+)
+AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY = float(
+    os.getenv("PAPERBANANA_AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY", "180")
+)
 AUTO_PROVIDER_COOLDOWN_SECONDS = int(os.getenv("PAPERBANANA_AUTO_PROVIDER_COOLDOWN_SECONDS", "300"))
 DEFAULT_TEXT_MODEL_FALLBACKS = [
     "gpt-5.5",
@@ -78,12 +97,29 @@ TEXT_MODEL_FALLBACKS = [
     ).split(",")
     if item.strip()
 ]
+DEFAULT_IMAGE_MODEL_FALLBACKS = [
+    "gpt-image-2",
+    "gemini-3.1-flash-image-preview",
+]
+IMAGE_MODEL_FALLBACKS = [
+    item.strip()
+    for item in os.getenv(
+        "PAPERBANANA_IMAGE_MODEL_FALLBACKS",
+        ",".join(DEFAULT_IMAGE_MODEL_FALLBACKS),
+    ).split(",")
+    if item.strip()
+]
 _provider_unhealthy_until: Dict[tuple[str, str, str], float] = {}
 
 
 def _debug_log(message: str):
     if DEBUG_LOGS:
         print(message)
+
+
+def _retry_backoff_delay(base_delay: float, attempt: int, max_delay: float) -> float:
+    """Exponential backoff delay for retry attempt index 0, 1, 2..."""
+    return min(base_delay * (2 ** attempt), max_delay)
 
 
 def _normalize_provider(provider: str = "") -> str:
@@ -183,6 +219,10 @@ def _image_provider_candidates(model_name: str) -> List[str]:
 
 def _text_model_candidates(model_name: str) -> List[str]:
     return _dedupe([model_name, *TEXT_MODEL_FALLBACKS])
+
+
+def _image_model_candidates(model_name: str) -> List[str]:
+    return _dedupe([model_name, *IMAGE_MODEL_FALLBACKS])
 
 
 def _extract_text_config(config) -> Dict[str, Any]:
@@ -639,8 +679,13 @@ async def call_gemini_with_retry_async(
             if "nanoviz" in model_name or "image" in model_name:
                 raw_response_list = []
                 if not response.candidates or not response.candidates[0].content.parts:
-                    _debug_log(f"[Gemini] 图像响应为空，{retry_delay}s 后重试")
-                    await asyncio.sleep(retry_delay)
+                    current_delay = _retry_backoff_delay(
+                        retry_delay,
+                        attempt,
+                        AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY if "image" in model_name else AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY,
+                    )
+                    _debug_log(f"[Gemini] 图像响应为空，{current_delay}s 后重试")
+                    await asyncio.sleep(current_delay)
                     continue
                 for part in response.candidates[0].content.parts:
                     if part.inline_data:
@@ -661,7 +706,11 @@ async def call_gemini_with_retry_async(
 
         except Exception as e:
             context_msg = f" for {error_context}" if error_context else ""
-            current_delay = min(retry_delay * (2 ** attempt), 30)
+            current_delay = _retry_backoff_delay(
+                retry_delay,
+                attempt,
+                AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY if "image" in model_name else AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY,
+            )
             _debug_log(
                 f"[Gemini] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {e}"
             )
@@ -833,7 +882,9 @@ async def call_claude_with_retry_async(
             context_msg = f" for {error_context}" if error_context else ""
             _debug_log(f"[Claude] Attempt {attempt + 1}/{max_attempts} failed{context_msg}: {error_str}")
             if attempt < max_attempts - 1:
-                await asyncio.sleep(retry_delay)
+                await asyncio.sleep(
+                    _retry_backoff_delay(retry_delay, attempt, AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY)
+                )
 
     if not is_input_valid:
         print(f"[Claude] {model_name} 重试 {max_attempts} 次后失败")
@@ -897,7 +948,9 @@ async def call_openai_with_retry_async(
             context_msg = f" for {error_context}" if error_context else ""
             _debug_log(f"[OpenAI] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {error_str}")
             if attempt < max_attempts - 1:
-                await asyncio.sleep(retry_delay)
+                await asyncio.sleep(
+                    _retry_backoff_delay(retry_delay, attempt, AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY)
+                )
 
     if not is_input_valid:
         print(f"[OpenAI] {model_name} 重试 {max_attempts} 次后失败")
@@ -959,13 +1012,17 @@ async def call_openai_image_generation_with_retry_async(
             else:
                 _debug_log("[OpenAI 图像] 响应为空")
                 if attempt < max_attempts - 1:
-                    await asyncio.sleep(retry_delay)
+                    await asyncio.sleep(
+                        _retry_backoff_delay(retry_delay, attempt, AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY)
+                    )
                 continue
         except Exception as e:
             context_msg = f" for {error_context}" if error_context else ""
             _debug_log(f"[OpenAI 图像] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {e}")
             if attempt < max_attempts - 1:
-                await asyncio.sleep(retry_delay)
+                await asyncio.sleep(
+                    _retry_backoff_delay(retry_delay, attempt, AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY)
+                )
             else:
                 print(f"[OpenAI 图像] {model_name} 重试 {max_attempts} 次后失败{context_msg}: {e}")
                 return ["Error"]
@@ -1013,10 +1070,14 @@ async def call_openai_image_edit_with_retry_async(
                 return [response.data[0].b64_json]
             _debug_log("[OpenAI 图像编辑] 响应为空")
             if attempt < max_attempts - 1:
-                await asyncio.sleep(retry_delay)
+                await asyncio.sleep(
+                    _retry_backoff_delay(retry_delay, attempt, AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY)
+                )
         except Exception as e:
             context_msg = f" for {error_context}" if error_context else ""
-            current_delay = min(retry_delay * (2 ** attempt), 60)
+            current_delay = _retry_backoff_delay(
+                retry_delay, attempt, AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY
+            )
             _debug_log(f"[OpenAI 图像编辑] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {e}")
             if attempt < max_attempts - 1:
                 await asyncio.sleep(current_delay)
@@ -1064,8 +1125,8 @@ async def call_text_model_with_retry_async(
                         model_name=current_model,
                         contents=contents,
                         config=config,
-                        max_attempts=AUTO_PROVIDER_ATTEMPTS,
-                        retry_delay=AUTO_PROVIDER_RETRY_DELAY,
+                        max_attempts=AUTO_TEXT_PROVIDER_ATTEMPTS,
+                        retry_delay=AUTO_TEXT_PROVIDER_RETRY_DELAY,
                         error_context=error_context,
                     )
                     if not _is_bad_response(result):
@@ -1158,40 +1219,44 @@ async def call_image_model_with_retry_async(
     cfg = config or {}
 
     if _is_auto_provider(provider_name):
-        candidates = _image_provider_candidates(model_name)
+        model_candidates = _image_model_candidates(model_name)
         attempted = []
-        for candidate in candidates:
-            if not _is_provider_available(candidate, kind="image", model_name=model_name):
-                _debug_log(f"[自动通道] 跳过图像通道 {candidate}: 未配置或未初始化")
-                continue
-            if not _is_provider_healthy(candidate, kind="image", model_name=model_name):
-                _debug_log(f"[自动通道] 跳过图像组合 {model_name}@{candidate}: 近期失败，冷却中")
-                continue
-            attempted.append(candidate)
-            try:
-                _debug_log(f"[自动通道] 图像模型 {model_name} 尝试使用 {candidate}")
-                result = await call_image_model_with_retry_async(
-                    provider=candidate,
-                    model_name=model_name,
-                    prompt=prompt,
-                    config=config,
-                    contents=contents,
-                    system_prompt=system_prompt,
-                    temperature=temperature,
-                    max_attempts=AUTO_PROVIDER_ATTEMPTS,
-                    retry_delay=AUTO_PROVIDER_RETRY_DELAY,
-                    error_context=error_context,
-                )
-                if not _is_bad_response(result):
-                    print(f"[自动通道] 图像模型 {model_name} 使用 {candidate} 成功")
-                    return result
-                print(f"[自动通道] 图像组合 {model_name}@{candidate} 重试后仍失败")
-                _mark_provider_unhealthy(candidate, "image", model_name, "返回 Error")
-            except Exception as e:
-                print(f"[自动通道] 图像组合 {model_name}@{candidate} 异常，尝试下一通道")
-                _mark_provider_unhealthy(candidate, "image", model_name, str(e)[:120])
+        for current_model in model_candidates:
+            if current_model != model_name:
+                print(f"[自动通道] 图像模型 {model_name} 失败后，尝试备用模型 {current_model}")
+            candidates = _image_provider_candidates(current_model)
+            for candidate in candidates:
+                if not _is_provider_available(candidate, kind="image", model_name=current_model):
+                    _debug_log(f"[自动通道] 跳过图像通道 {candidate}: 未配置或未初始化")
+                    continue
+                if not _is_provider_healthy(candidate, kind="image", model_name=current_model):
+                    _debug_log(f"[自动通道] 跳过图像组合 {current_model}@{candidate}: 近期失败，冷却中")
+                    continue
+                attempted.append(f"{current_model}@{candidate}")
+                try:
+                    _debug_log(f"[自动通道] 图像模型 {current_model} 尝试使用 {candidate}")
+                    result = await call_image_model_with_retry_async(
+                        provider=candidate,
+                        model_name=current_model,
+                        prompt=prompt,
+                        config=config,
+                        contents=contents,
+                        system_prompt=system_prompt,
+                        temperature=temperature,
+                        max_attempts=AUTO_IMAGE_PROVIDER_ATTEMPTS,
+                        retry_delay=AUTO_IMAGE_PROVIDER_RETRY_DELAY,
+                        error_context=error_context,
+                    )
+                    if not _is_bad_response(result):
+                        print(f"[自动通道] 图像模型 {current_model} 使用 {candidate} 成功")
+                        return result
+                    print(f"[自动通道] 图像组合 {current_model}@{candidate} 重试后仍失败")
+                    _mark_provider_unhealthy(candidate, "image", current_model, "返回 Error")
+                except Exception as e:
+                    print(f"[自动通道] 图像组合 {current_model}@{candidate} 异常，尝试下一通道")
+                    _mark_provider_unhealthy(candidate, "image", current_model, str(e)[:120])
 
-        print(f"[自动通道] 图像模型 {model_name} 所有可用通道均失败，已尝试: {attempted}")
+        print(f"[自动通道] 图像模型和通道均失败，已尝试: {attempted}")
         return ["Error"]
 
     if is_gateway_provider(provider_name):

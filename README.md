@@ -36,18 +36,10 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 - 系统会根据可用 API Key 自动选择通道。
 - 遇到超时、异常、返回 `Error` 或初始化失败时，会自动尝试下一条可用通道。
 - 自动 fallback 现在按 **模型@通道** 粒度工作：例如 `gemini-2.5-flash@aipaibox` 失败后，不会阻塞 `gpt-5.5@aipaibox` 或 `gpt-5.4@aipaibox`。
-- 每个模型通道组合会先完成短重试，再临时暂停该组合，避免“一次失败就熔断”，也避免国内不稳定环境下反复卡住。
+- 每个模型通道组合会先完成指数退避重试，再临时暂停该组合，避免“一次失败就熔断”，也避免国内不稳定环境下反复卡住。
 - 文本模型不再局限于 Gemini 系列，可使用 `gpt-5.5`、`gpt-5.4` 等 OpenAI 系列模型。
 
-可通过环境变量调整自动切换策略：
-
-| 环境变量 | 默认值 | 说明 |
-|---------|--------|------|
-| `PAPERBANANA_AUTO_PROVIDER_ATTEMPTS` | `2` | 每个模型通道组合的尝试次数 |
-| `PAPERBANANA_AUTO_PROVIDER_RETRY_DELAY` | `2` | 单个组合内重试间隔（秒） |
-| `PAPERBANANA_AUTO_PROVIDER_COOLDOWN_SECONDS` | `300` | 失败组合的暂停时间（秒） |
-| `PAPERBANANA_TEXT_MODEL_FALLBACKS` | `gpt-5.5,gpt-5.4,gemini-2.5-flash` | 文本模型备用顺序 |
-| `PAPERBANANA_DEBUG` | 空 | 设置为 `1` 时输出详细 API 请求/重试日志 |
+默认策略已经针对国内不稳定网络做了平衡：文本通道使用较短退避，图像通道使用更长退避；`gpt-image-2` 不稳定时会自动尝试 Gemini 图像模型。高级用户可以通过环境变量覆盖重试次数、退避时间和模型 fallback 顺序，但日常使用通常无需调整。
 
 ### 支持 OpenAI `gpt-image-2`
 
