@@ -101,33 +101,19 @@ class PlannerAgent(BaseAgent):
         content_list.append({"type": "text", "text": user_prompt})
         print(f"[DEBUG] [PlannerAgent] content_list 长度={len(content_list)}, 示例数={len(examples)}")
 
-        # 根据 provider 路由 API 调用
-        if self.exp_config.provider == "evolink":
-            response_list = await generation_utils.call_evolink_text_with_retry_async(
-                model_name=self.model_name,
-                contents=content_list,
-                config={
-                    "system_prompt": self.system_prompt,
-                    "temperature": self.exp_config.temperature,
-                    "max_output_tokens": 50000,
-                },
-                max_attempts=5,
-                retry_delay=5,
-            )
-        else:
-            from google.genai import types
-            response_list = await generation_utils.call_gemini_with_retry_async(
-                model_name=self.model_name,
-                contents=content_list,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    temperature=self.exp_config.temperature,
-                    candidate_count=1,
-                    max_output_tokens=50000,
-                ),
-                max_attempts=5,
-                retry_delay=5,
-            )
+        response_list = await generation_utils.call_text_model_with_retry_async(
+            provider=self.exp_config.provider,
+            model_name=self.model_name,
+            contents=content_list,
+            config={
+                "system_prompt": self.system_prompt,
+                "temperature": self.exp_config.temperature,
+                "candidate_num": 1,
+                "max_output_tokens": 50000,
+            },
+            max_attempts=5,
+            retry_delay=5,
+        )
 
         for idx, response in enumerate(response_list):
             data[f"target_{cfg['task_name']}_desc{idx}"] = response.strip()

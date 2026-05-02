@@ -1,6 +1,6 @@
 """
-Evolink API Provider
-支持文本生成（OpenAI 兼容接口）和图像生成（异步任务接口）
+OpenAI-compatible gateway provider.
+支持 AIPAIBOX/Evolink 等网关的文本生成（OpenAI 兼容接口）和图像生成（异步任务接口）。
 """
 
 import asyncio
@@ -19,7 +19,7 @@ class ClientError(Exception):
 
 class EvolinkProvider(BaseProvider):
     """
-    Evolink API Provider
+    OpenAI-compatible gateway provider
 
     文本模型: 通过 /v1/chat/completions (OpenAI 兼容)
     图像模型: 通过 /v1/images/generations (异步任务) + /v1/tasks/{id} (轮询)
@@ -28,7 +28,7 @@ class EvolinkProvider(BaseProvider):
     def __init__(
         self,
         api_key: str,
-        base_url: str = "https://api.evolink.ai",
+        base_url: str = "https://api.aipaibox.com",
     ):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")

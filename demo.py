@@ -50,8 +50,11 @@ try:
     config_path = Path(__file__).parent / "configs" / "model_config.yaml"
     model_config_data = {}
     if config_path.exists():
-        with open(config_path, "r", encoding="utf-8") as f:
-            model_config_data = yaml.safe_load(f) or {}
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                model_config_data = yaml.safe_load(f) or {}
+        except yaml.YAMLError as e:
+            print(f"警告：配置文件 {config_path} 解析失败，将仅使用环境变量和默认值。错误：{e}")
 
     def get_config_val(section, key, env_var, default=""):
         val = os.getenv(env_var)
@@ -138,24 +141,89 @@ def create_sample_inputs(method_content, caption, diagram_type="Pipeline", aspec
 
     return inputs
 
-async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", retrieval_setting="auto", model_name="", image_model_name="", provider="evolink", api_key=""):
+TEXT_MODEL_OPTIONS = [
+    "gpt-5.5",
+    "gpt-5.4",
+    "gpt-4.1",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "自定义...",
+]
+
+IMAGE_MODEL_OPTIONS = [
+    "gpt-image-2",
+    "gemini-3.1-flash-image-preview",
+    "自定义...",
+]
+
+
+def _select_index(options, value, default=0):
+    return options.index(value) if value in options else default
+
+
+def _model_selectbox_with_custom(label, options, default_value, key, help_text):
+    if default_value in options:
+        default_index = options.index(default_value)
+        custom_default = ""
+    else:
+        default_index = options.index("自定义...") if "自定义..." in options else 0
+        custom_default = default_value
+
+    selected = st.selectbox(
+        label,
+        options,
+        index=default_index,
+        key=f"{key}_preset",
+        help=help_text,
+    )
+    if selected != "自定义...":
+        return selected
+
+    return st.text_input(
+        f"{label}（自定义）",
+        value=custom_default,
+        key=f"{key}_custom",
+        help="输入任意兼容当前可用 API 通道的模型名称。",
+    ).strip()
+
+
+async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", retrieval_setting="auto", model_name="", image_model_name="", provider="auto", api_keys=None):
     """使用 PaperVizProcessor 并行处理多个候选方案。"""
+    api_keys = api_keys or {}
     print(f"\n{'='*60}")
     print(f"[DEBUG] process_parallel_candidates 开始")
     print(f"[DEBUG]   provider={provider}, model={model_name}, image_model={image_model_name}")
     print(f"[DEBUG]   exp_mode={exp_mode}, retrieval={retrieval_setting}, candidates={len(data_list)}")
-    print(f"[DEBUG]   api_key={'已设置 (' + api_key[:8] + '...)' if api_key else '未设置'}")
+    available_key_names = [name for name, key in api_keys.items() if key]
+    print(f"[DEBUG]   可用 key: {available_key_names or '无'}")
     print(f"{'='*60}")
 
-    # 使用界面传入的 API Key 初始化 Provider
-    if api_key:
-        from utils import generation_utils
-        if provider == "evolink":
-            generation_utils.init_evolink_provider(api_key)
-        elif provider == "gemini":
-            generation_utils.init_gemini_client(api_key)
-    else:
-        print(f"[DEBUG] ⚠️ 未提供 API Key，Provider 可能无法正常工作")
+    from utils import generation_utils
+
+    # 初始化所有可用通道；实际调用时由 provider="auto" 根据模型和失败情况选择。
+    aipaibox_key = api_keys.get("aipaibox", "")
+    evolink_key = api_keys.get("evolink", "")
+    google_key = api_keys.get("google", "")
+    openai_key = api_keys.get("openai", "")
+
+    if aipaibox_key:
+        generation_utils.init_evolink_provider(
+            aipaibox_key,
+            base_url=get_config_val("aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"),
+        )
+    elif evolink_key:
+        generation_utils.init_evolink_provider(
+            evolink_key,
+            base_url=get_config_val("evolink", "base_url", "EVOLINK_BASE_URL", "https://api.evolink.ai"),
+        )
+
+    if google_key:
+        generation_utils.init_gemini_client(google_key)
+    if openai_key:
+        generation_utils.init_openai_client(openai_key)
+
+    if not any([aipaibox_key, evolink_key, google_key, openai_key]):
+        print("[DEBUG] ⚠️ 未提供 API Key，将仅使用配置文件/环境变量中已初始化的通道")
 
     # 创建实验配置
     exp_config = config.ExpConfig(
@@ -199,98 +267,78 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
 
     return results
 
-async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9", image_size="2K", api_key="", provider="evolink"):
+async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9", image_size="2K", api_keys=None, provider="auto"):
     """
-    使用图像编辑 API 精修图像，支持 Evolink 和 Gemini 两种 Provider。
+    使用自动 API 通道精修图像，支持 AIPAIBOX/Evolink、Gemini 和 OpenAI。
 
     参数：
         image_bytes: 图像字节数据
         edit_prompt: 描述所需修改的文本
         aspect_ratio: 输出宽高比 (21:9, 16:9, 3:2)
         image_size: 输出分辨率 (2K 或 4K)
-        api_key: API 密钥
-        provider: "evolink" 或 "gemini"
+        api_keys: 各通道 API 密钥
+        provider: 固定为 "auto"，保留参数用于兼容
 
     返回：
         元组 (编辑后的图像字节数据, 成功消息)
     """
     try:
         from utils import generation_utils
+        api_keys = api_keys or {}
 
-        if provider == "gemini":
-            # ====== Gemini 路径：多模态 API，直接传图片字节 ======
-            if api_key:
-                generation_utils.init_gemini_client(api_key)
+        aipaibox_key = api_keys.get("aipaibox", "")
+        evolink_key = api_keys.get("evolink", "")
+        google_key = api_keys.get("google", "")
+        openai_key = api_keys.get("openai", "")
 
-            if generation_utils.gemini_client is None:
-                return None, "❌ Gemini Client 未初始化，请在侧边栏填入 Google API Key。"
-
-            from google.genai import types
-
-            contents = [
-                types.Part.from_text(text=edit_prompt),
-                types.Part.from_bytes(mime_type="image/jpeg", data=image_bytes),
-            ]
-            config = types.GenerateContentConfig(
-                temperature=1.0,
-                max_output_tokens=8192,
-                response_modalities=["IMAGE"],
-                image_config=types.ImageConfig(
-                    aspect_ratio=aspect_ratio,
-                    image_size=image_size,
-                ),
+        if aipaibox_key:
+            generation_utils.init_evolink_provider(
+                aipaibox_key,
+                base_url=get_config_val("aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"),
             )
-
-            image_model = st.session_state.get("tab1_image_model_name", "gemini-3.1-flash-image-preview")
-            response = await asyncio.to_thread(
-                generation_utils.gemini_client.models.generate_content,
-                model=image_model,
-                contents=contents,
-                config=config,
+        elif evolink_key:
+            generation_utils.init_evolink_provider(
+                evolink_key,
+                base_url=get_config_val("evolink", "base_url", "EVOLINK_BASE_URL", "https://api.evolink.ai"),
             )
+        if google_key:
+            generation_utils.init_gemini_client(google_key)
+        if openai_key:
+            generation_utils.init_openai_client(openai_key)
 
-            if response.candidates and response.candidates[0].content.parts:
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, "inline_data") and part.inline_data:
-                        edited_image_data = part.inline_data.data
-                        if isinstance(edited_image_data, bytes):
-                            return edited_image_data, "✅ 图像精修成功！"
-                        elif isinstance(edited_image_data, str):
-                            return base64.b64decode(edited_image_data), "✅ 图像精修成功！"
+        image_model = st.session_state.get("tab1_image_model_name", "gemini-3.1-flash-image-preview")
+        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+        result = await generation_utils.call_image_model_with_retry_async(
+            provider=provider,
+            model_name=image_model,
+            prompt=edit_prompt,
+            contents=[
+                {"type": "text", "text": edit_prompt},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/jpeg",
+                        "data": image_b64,
+                    },
+                },
+            ],
+            config={
+                "aspect_ratio": aspect_ratio,
+                "quality": image_size,
+                "gateway_quality": image_size,
+                "openai_quality": "high",
+                "output_format": "png",
+                "image_size": image_size,
+            },
+            max_attempts=3,
+            retry_delay=10,
+        )
 
-            return None, "❌ Gemini 未返回图像数据"
+        if result and result[0] and result[0] != "Error":
+            return base64.b64decode(result[0]), "✅ 图像精修成功！"
 
-        else:
-            # ====== Evolink 路径：上传图片获取 URL → image_urls ======
-            if api_key:
-                generation_utils.init_evolink_provider(api_key)
-
-            if generation_utils.evolink_provider is None:
-                return None, "❌ Evolink Provider 未初始化，请在侧边栏填入 API Key。"
-
-            image_model = st.session_state.get("tab1_image_model_name", "gemini-3.1-flash-image-preview")
-
-            # 步骤 1：上传原始图片到 Evolink 文件服务
-            image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-            ref_image_url = await generation_utils.upload_image_to_evolink(image_b64, media_type="image/jpeg")
-            print(f"[精修] 参考图已上传: {ref_image_url[:80]}...")
-
-            # 步骤 2：图像生成 API（传入参考图 URL）
-            result = await generation_utils.evolink_provider.generate_image(
-                model_name=image_model,
-                prompt=edit_prompt,
-                aspect_ratio=aspect_ratio,
-                quality=image_size,
-                image_urls=[ref_image_url],
-                max_attempts=3,
-                retry_delay=10,
-            )
-
-            if result and result[0] and result[0] != "Error":
-                edited_image_data = base64.b64decode(result[0])
-                return edited_image_data, "✅ 图像精修成功！"
-
-            return None, "❌ 图像精修失败，未返回有效图像数据"
+        return None, "❌ 图像精修失败，所有可用通道均未返回有效图像数据"
 
     except Exception as e:
         return None, f"❌ 错误：{str(e)}"
@@ -511,73 +559,64 @@ def main():
                 help="评审优化迭代的最大轮次"
             )
 
-            # Provider 选择
-            provider = st.selectbox(
-                "API Provider",
-                ["gemini", "evolink"],
-                index=0,
-                key="tab1_provider",
-                help="gemini：Google 官方 API（需翻墙）| evolink：国内代理"
-            )
+            default_text_model = get_config_val("defaults", "model_name", "PAPERBANANA_MODEL_NAME", "gemini-2.5-flash")
+            default_image_model = get_config_val("defaults", "image_model_name", "PAPERBANANA_IMAGE_MODEL_NAME", "gemini-3.1-flash-image-preview")
 
-            # Provider 对应的默认配置
-            _provider_defaults = {
-                "evolink": {
-                    "api_key_label": "API Key",
-                    "api_key_help": "Evolink API 密钥（Bearer Token）",
-                    "api_key_default": get_config_val("evolink", "api_key", "EVOLINK_API_KEY", ""),
-                    "model_name": "gemini-2.5-flash",
-                    "image_model_name": "gemini-3.1-flash-image-preview",
-                },
-                "gemini": {
-                    "api_key_label": "Google API Key",
-                    "api_key_help": "Google AI Studio API 密钥",
-                    "api_key_default": get_config_val("api_keys", "google_api_key", "GOOGLE_API_KEY", ""),
-                    "model_name": "gemini-2.5-flash",
-                    "image_model_name": "gemini-3.1-flash-image-preview",
-                },
-            }
-            _pd = _provider_defaults[provider]
-
-            # 首次加载时设置默认值
-            if "tab1_api_key" not in st.session_state:
-                st.session_state["tab1_api_key"] = _pd["api_key_default"]
-            if "tab1_model_name" not in st.session_state:
-                st.session_state["tab1_model_name"] = _pd["model_name"]
-            if "tab1_image_model_name" not in st.session_state:
-                st.session_state["tab1_image_model_name"] = _pd["image_model_name"]
-
-            # 检测 provider 切换，重置模型名称
-            if "prev_provider" not in st.session_state:
-                st.session_state["prev_provider"] = provider
-            if st.session_state["prev_provider"] != provider:
-                st.session_state["prev_provider"] = provider
-                st.session_state["tab1_model_name"] = _pd["model_name"]
-                st.session_state["tab1_image_model_name"] = _pd["image_model_name"]
-                st.session_state["tab1_api_key"] = _pd["api_key_default"]
-                st.rerun()
-
-            # API Key
-            api_key = st.text_input(
-                _pd["api_key_label"],
-                type="password",
-                key="tab1_api_key",
-                help=_pd["api_key_help"]
-            )
-
-            # 文本模型
-            model_name = st.text_input(
+            model_name = _model_selectbox_with_custom(
                 "文本模型",
+                TEXT_MODEL_OPTIONS,
                 key="tab1_model_name",
-                help="用于推理/规划/评审的模型名称"
+                default_value=default_text_model,
+                help_text="用于推理/规划/评审。系统会根据模型和可用 key 自动选择 AIPAIBOX、Google 或 OpenAI 通道，并在失败时切换。"
             )
 
-            # 图像模型
-            image_model_name = st.text_input(
+            image_model_name = _model_selectbox_with_custom(
                 "图像模型",
+                IMAGE_MODEL_OPTIONS,
                 key="tab1_image_model_name",
-                help="用于图像生成的模型名称"
+                default_value=default_image_model,
+                help_text="用于图像生成/精修。系统会自动选择可用通道。"
             )
+
+            st.caption("API 通道自动选择；发生超时、返回 Error 或初始化失败时会尝试下一个可用通道。")
+
+            with st.expander("API Keys", expanded=False):
+                aipaibox_api_key = st.text_input(
+                    "AIPAIBOX API Key",
+                    type="password",
+                    key="tab1_aipaibox_api_key",
+                    value=get_config_val("aipaibox", "api_key", "AIPAIBOX_API_KEY", ""),
+                    help="用于 https://api.aipaibox.com 国内网关"
+                )
+                google_api_key = st.text_input(
+                    "Google API Key",
+                    type="password",
+                    key="tab1_google_api_key",
+                    value=get_config_val("api_keys", "google_api_key", "GOOGLE_API_KEY", ""),
+                    help="用于 Google Gemini 官方 endpoint"
+                )
+                openai_api_key = st.text_input(
+                    "OpenAI API Key",
+                    type="password",
+                    key="tab1_openai_api_key",
+                    value=get_config_val("api_keys", "openai_api_key", "OPENAI_API_KEY", ""),
+                    help="用于 OpenAI 文本模型和 gpt-image-2"
+                )
+                evolink_api_key = st.text_input(
+                    "Evolink API Key",
+                    type="password",
+                    key="tab1_evolink_api_key",
+                    value=get_config_val("evolink", "api_key", "EVOLINK_API_KEY", ""),
+                    help="兼容旧配置；未填写 AIPAIBOX key 时才会作为网关通道使用"
+                )
+
+            provider = "auto"
+            api_keys = {
+                "aipaibox": aipaibox_api_key,
+                "google": google_api_key,
+                "openai": openai_api_key,
+                "evolink": evolink_api_key,
+            }
 
         st.divider()
 
@@ -711,7 +750,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                             model_name=model_name,
                             image_model_name=image_model_name,
                             provider=provider,
-                            api_key=api_key
+                            api_keys=api_keys
                         ))
                         st.session_state["results"] = results
                         st.session_state["exp_mode"] = exp_mode
@@ -906,7 +945,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                                         edit_prompt=edit_prompt,
                                         aspect_ratio=refine_aspect_ratio,
                                         image_size=refine_resolution,
-                                        api_key=api_key,
+                                        api_keys=api_keys,
                                         provider=provider,
                                     )
                                 )

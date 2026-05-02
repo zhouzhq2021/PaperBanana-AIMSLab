@@ -2,11 +2,47 @@
 
 AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动生成高质量学术配图。
 
-> 本项目为 **PaperBanana-AIMSLab**（AIMSLab 特供版本），已将默认 API URL 更换为 `https://api.aipaibox.com`，由 `zhouzhq2021@sjtu.edu.cn` 修改。
+[![GitHub stars](https://img.shields.io/github/stars/zhouzhq2021/PaperBanana-AIMSLab?style=social)](https://github.com/zhouzhq2021/PaperBanana-AIMSLab/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/zhouzhq2021/PaperBanana-AIMSLab?style=social)](https://github.com/zhouzhq2021/PaperBanana-AIMSLab/forks)
+[![GitHub issues](https://img.shields.io/github/issues/zhouzhq2021/PaperBanana-AIMSLab)](https://github.com/zhouzhq2021/PaperBanana-AIMSLab/issues)
 
-基于开源项目 [PaperBanana](https://github.com/dwzhu-pku/PaperBanana)（[论文](https://huggingface.co/papers/2601.23265)）改造，全中文界面，国内可直接使用。
+> 本项目最初是为支持 **AIMSLab** 在论文配图生成中的实际使用需求而开发，现在整理为面向更广泛科研用户的中文增强版本。项目基于开源项目 [PaperBanana](https://github.com/dwzhu-pku/PaperBanana)（[论文](https://huggingface.co/papers/2601.23265)）优化而来，重点改进国内可用性、多 API 通道容错和交互体验。
+
+默认 API 网关已配置为 `https://api.aipaibox.com`，同时保留 Google Gemini 官方 endpoint、OpenAI 官方 API 和兼容网关通道。
 
 ![示例效果](assets/teaser_figure.jpg)
+
+---
+
+## 项目热度统计
+
+欢迎给项目点一个 Star，Star 数会直接显示在上方徽章中，也能帮助更多需要论文配图工具的同学发现这个项目：
+
+**[⭐ Star PaperBanana-AIMSLab](https://github.com/zhouzhq2021/PaperBanana-AIMSLab)**
+
+---
+
+## 最新更新
+
+### 多渠道自动切换，解决国内 API 不稳定痛点
+
+之前版本主要依赖少数 API 通道，实际使用中如果遇到国内网关超时、限流、返回空结果或临时不可用，就需要手动切换配置，批量生成时很容易中断。
+
+现在已支持 **AIPAIBOX / Google Gemini 官方 endpoint / OpenAI 官方 API / Evolink 兼容通道**，并在调用层加入自动 fallback：
+
+- 侧边栏不再要求手动选择 Provider，只需要选择文本模型和图像模型。
+- 系统会根据可用 API Key 自动选择通道。
+- 遇到超时、异常、返回 `Error` 或初始化失败时，会自动尝试下一条可用通道。
+- 文本模型不再局限于 Gemini 系列，可使用 `gpt-5.5`、`gpt-5.4`、`gpt-4.1` 等 OpenAI 系列模型。
+
+### 支持 OpenAI `gpt-image-2`
+
+图像生成和图像精修新增 `gpt-image-2` 支持：
+
+- 可在图像模型下拉框中直接选择 `gpt-image-2`。
+- 支持纯文本生成图像。
+- 支持 image-to-image 精修，上传已有图表后根据编辑指令生成新版本。
+- 与自动通道切换联动：优先尝试可用网关，失败后可切换到 OpenAI 官方 API。
 
 ---
 
@@ -63,16 +99,18 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 
 ### 🔧 多 API 支持
 
-内置两种 API 提供商，开箱即用：
+内置多种 API 通道，开箱即用：
 
 | 模式 | 说明 | 网络要求 |
 |------|------|---------|
-| **Evolink**（默认） | 国内 API 代理，直连可用 | 无需翻墙 |
-| **Google Gemini** | Google 官方 API | 需要科学上网 |
+| **AIPAIBOX**（默认） | `https://api.aipaibox.com`，OpenAI-compatible 国内网关 | 无需翻墙 |
+| **Google Gemini** | Google 官方 Gemini endpoint | 需要科学上网 |
+| **OpenAI** | OpenAI 官方 API，支持文本模型和 `gpt-image-2` | 需要可访问 OpenAI |
+| **Evolink** | 兼容旧配置的国内 API 代理 | 无需翻墙 |
 
-在界面侧边栏一键切换，模型名称自动更新。
+在界面侧边栏选择文本模型和图像模型即可；系统会根据可用 API Key 自动选择通道，遇到超时或返回 `Error` 时会尝试切换到下一条可用通道。
 
-> **说明**：本工具与 Evolink 无任何商业关联，仅作为内置的国内可用 API 方案提供。项目采用 Provider 抽象架构（见 `providers/` 目录），你可以自行集成任何兼容 OpenAI 接口的 API 服务商（如智谱 AI、通义千问、硅基流动、火山引擎等），只需参照 `providers/base.py` 的接口实现一个新的 Provider 即可。
+> **说明**：本工具与 AIPAIBOX/Evolink 无任何商业关联，仅作为内置的国内可用 API 方案提供。项目采用 Provider 抽象架构（见 `providers/` 目录），你可以自行集成任何兼容 OpenAI 接口的 API 服务商。
 
 ---
 
@@ -80,12 +118,13 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 
 ### 第一步：获取 API Key
 
-**推荐 Evolink（国内直连）**：前往 https://evolink.ai/dashboard/keys 注册获取
+**推荐 AIPAIBOX（国内直连）**：在 `configs/model_config.yaml` 中填写 `aipaibox.api_key`，默认地址为 `https://api.aipaibox.com`。
 
-也可以用 Google Gemini：前往 https://aistudio.google.com/apikey 获取（需翻墙）
+也可以用 Google Gemini：前往 https://aistudio.google.com/apikey 获取，并填写 `api_keys.google_api_key`。
 
-如需通过中转网关访问 Gemini，可在 `configs/model_config.yaml` 中配置：
-`google.base_url`（或环境变量 `GOOGLE_BASE_URL`）。
+如需使用 OpenAI 文本模型或 `gpt-image-2`，填写 `api_keys.openai_api_key`，并在界面下拉框选择对应模型。
+
+如需通过中转访问 Google 或 OpenAI，可在 `configs/model_config.yaml` 中配置 `google.base_url` 或 `openai.base_url`。
 
 ### 第二步：启动程序
 
@@ -139,10 +178,9 @@ data/
 
 | 设置项 | 说明 |
 |--------|------|
-| API Provider | Evolink（国内直连）或 Gemini（需翻墙） |
-| API Key | 对应提供商的密钥 |
-| 文本模型 | 用于规划/评审的模型（默认 gemini-2.5-flash），可直接修改 |
-| 图像模型 | 用于生成图片的模型（默认 nano-banana-2-beta），可直接修改 |
+| API Keys | 填写可用通道的密钥；通道由系统自动选择 |
+| 文本模型 | 用于规划/评审的模型（如 gpt-5.5、gpt-5.4、gemini-2.5-flash），支持下拉选择和自定义输入 |
+| 图像模型 | 用于生成图片的模型（gpt-image-2、gemini-3.1-flash-image-preview），支持下拉选择和自定义输入 |
 | 流水线模式 | `demo_planner_critic`（快速）或 `demo_full`（含风格化，更美观） |
 | 检索设置 | auto / auto-full / random / none，详见上方 [检索费用对比](#-智能检索省-96-api-费用) |
 | 候选方案数量 | 1-20，建议 3-5 个 |
@@ -191,8 +229,8 @@ streamlit run demo.py --server.port 8501
 **Q: 启动时报错找不到 Python？**
 A: 一键脚本会自动下载便携版 Python，请确保网络通畅。也可以手动安装 Python 3.10+ 后重试。
 
-**Q: Evolink 和 Gemini 有什么区别？**
-A: 功能完全一样。Evolink 是国内代理，不需要翻墙；Gemini 是 Google 官方接口，需要科学上网。
+**Q: AIPAIBOX、Gemini 和 OpenAI 有什么区别？**
+A: AIPAIBOX 是国内可访问的 OpenAI-compatible 网关；Gemini 是 Google 官方接口；OpenAI 是官方 OpenAI 接口，可使用 OpenAI 文本模型和 `gpt-image-2`。
 
 **Q: 生成一次大概花多少钱？**
 A: 取决于候选数量和检索模式。默认配置（5 候选 + `auto` 检索）约消耗 15 万文本 tokens + 5 次图像生成。比原版省 96% 检索费用。具体价格请查看 API 服务商的定价页面。
@@ -204,7 +242,7 @@ A: 5 个候选方案通常需要 10-15 分钟。单个候选约 2-3 分钟。
 A: 可以。将检索设置改为 `none` 即可，此时不需要 `data/` 目录中的数据集。
 
 **Q: 可以在界面上换模型吗？**
-A: 可以。侧边栏的「文本模型」和「图像模型」输入框可以直接编辑，输入任何兼容的模型名称即可生效。切换 API Provider 时模型名会自动重置为对应默认值。
+A: 可以。侧边栏的「文本模型」和「图像模型」支持下拉选择，也支持自定义输入。文本模型不再局限于 Gemini 系列；选择 OpenAI 文本模型或 `gpt-image-2` 时，系统会自动使用可用的 OpenAI/AIPAIBOX 通道。
 
 **Q: Windows 上报错 `module 'time' has no attribute 'tzset'`？**
 A: 已修复。请拉取最新代码（`git pull`）即可解决。

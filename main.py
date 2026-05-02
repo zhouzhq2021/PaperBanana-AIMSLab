@@ -82,6 +82,19 @@ async def main():
         default="",
         help="model name to use (default: "")",
     )
+    parser.add_argument(
+        "--image_model_name",
+        type=str,
+        default="",
+        help="image model name to use (default: read from config)",
+    )
+    parser.add_argument(
+        "--provider",
+        type=str,
+        default="auto",
+        choices=["auto", "aipaibox", "evolink", "gateway", "gemini", "openai", "anthropic"],
+        help="API provider/channel to use (default: auto)",
+    )
     args = parser.parse_args()
 
     exp_config = config.ExpConfig(
@@ -92,6 +105,8 @@ async def main():
         retrieval_setting=args.retrieval_setting,
         max_critic_rounds=args.max_critic_rounds,
         model_name=args.model_name,
+        image_model_name=args.image_model_name,
+        provider=args.provider,
         work_dir=Path(__file__).parent,
     )
     

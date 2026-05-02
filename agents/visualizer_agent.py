@@ -129,77 +129,40 @@ class VisualizerAgent(BaseAgent):
             content_list = [{"type": "text", "text": prompt_text}]
             print(f"[DEBUG] [VisualizerAgent] 处理 {desc_key}, prompt 长度={len(prompt_text)}")
 
-            # 根据 provider 路由 API 调用
-            if self.exp_config.provider == "evolink":
-                if cfg["use_image_generation"]:
-                    # Evolink 图像生成（异步任务模式）
-                    aspect_ratio = "1:1"
-                    if "additional_info" in data and "rounded_ratio" in data["additional_info"]:
-                        aspect_ratio = data["additional_info"]["rounded_ratio"]
-
-                    response_list = await generation_utils.call_evolink_image_with_retry_async(
-                        model_name=self.model_name,
-                        prompt=prompt_text,
-                        config={
-                            "aspect_ratio": aspect_ratio,
-                            "quality": "2K",
-                        },
-                        max_attempts=5,
-                        retry_delay=30,
-                    )
-                else:
-                    # Evolink 文本生成（用于代码生成）
-                    response_list = await generation_utils.call_evolink_text_with_retry_async(
-                        model_name=self.exp_config.model_name,
-                        contents=content_list,
-                        config={
-                            "system_prompt": self.system_prompt,
-                            "temperature": self.exp_config.temperature,
-                            "max_output_tokens": cfg["max_output_tokens"],
-                        },
-                        max_attempts=5,
-                        retry_delay=30,
-                    )
-            elif "gemini" in self.model_name:
-                from google.genai import types
-                gen_config_args = {
-                    "system_instruction": self.system_prompt,
-                    "temperature": self.exp_config.temperature,
-                    "candidate_count": 1,
-                    "max_output_tokens": cfg["max_output_tokens"],
-                }
-                if cfg["use_image_generation"]:
-                    aspect_ratio = "1:1"
-                    if "additional_info" in data and "rounded_ratio" in data["additional_info"]:
-                        aspect_ratio = data["additional_info"]["rounded_ratio"]
-                    gen_config_args["response_modalities"] = ["IMAGE"]
-                    gen_config_args["image_config"] = types.ImageConfig(
-                        aspect_ratio=aspect_ratio,
-                        image_size="1k",
-                    )
-                response_list = await generation_utils.call_gemini_with_retry_async(
-                    model_name=self.model_name,
-                    contents=content_list,
-                    config=types.GenerateContentConfig(**gen_config_args),
-                    max_attempts=5,
-                    retry_delay=30,
-                )
-            elif "gpt-image" in self.model_name:
-                image_config = {
-                    "size": "1536x1024",
-                    "quality": "high",
-                    "background": "opaque",
-                    "output_format": "png",
-                }
-                response_list = await generation_utils.call_openai_image_generation_with_retry_async(
+            if cfg["use_image_generation"]:
+                aspect_ratio = "1:1"
+                if "additional_info" in data and "rounded_ratio" in data["additional_info"]:
+                    aspect_ratio = data["additional_info"]["rounded_ratio"]
+                response_list = await generation_utils.call_image_model_with_retry_async(
+                    provider=self.exp_config.provider,
                     model_name=self.model_name,
                     prompt=prompt_text,
-                    config=image_config,
+                    contents=content_list,
+                    system_prompt=self.system_prompt,
+                    temperature=self.exp_config.temperature,
+                    config={
+                        "aspect_ratio": aspect_ratio,
+                        "quality": "2K" if generation_utils.is_gateway_provider(self.exp_config.provider) else "high",
+                        "image_size": "1k",
+                        "output_format": "png",
+                    },
                     max_attempts=5,
                     retry_delay=30,
                 )
             else:
-                raise ValueError(f"Unsupported model: {self.model_name}")
+                response_list = await generation_utils.call_text_model_with_retry_async(
+                    provider=self.exp_config.provider,
+                    model_name=self.exp_config.model_name,
+                    contents=content_list,
+                    config={
+                        "system_prompt": self.system_prompt,
+                        "temperature": self.exp_config.temperature,
+                        "candidate_num": 1,
+                        "max_output_tokens": cfg["max_output_tokens"],
+                    },
+                    max_attempts=5,
+                    retry_delay=30,
+                )
 
             if not response_list or not response_list[0]:
                 print(f"[DEBUG] [VisualizerAgent] ⚠️ {desc_key}: API 返回空响应")

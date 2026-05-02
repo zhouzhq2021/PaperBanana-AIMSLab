@@ -155,33 +155,19 @@ class RetrieverAgent(BaseAgent):
         prompt_chars = len(user_prompt)
         print(f"[DEBUG] [RetrieverAgent] auto 检索 prompt: {prompt_chars:,} 字符 (~{prompt_chars//4:,} tokens), lite={lite}")
 
-        # 根据 provider 路由 API 调用
-        if self.exp_config.provider == "evolink":
-            response_list = await generation_utils.call_evolink_text_with_retry_async(
-                model_name=self.model_name,
-                contents=content_list,
-                config={
-                    "system_prompt": self.system_prompt,
-                    "temperature": self.exp_config.temperature,
-                    "max_output_tokens": 50000,
-                },
-                max_attempts=3,
-                retry_delay=30,
-            )
-        else:
-            from google.genai import types
-            response_list = await generation_utils.call_gemini_with_retry_async(
-                model_name=self.model_name,
-                contents=content_list,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_prompt,
-                    temperature=self.exp_config.temperature,
-                    candidate_count=1,
-                    max_output_tokens=50000,
-                ),
-                max_attempts=3,
-                retry_delay=30,
-            )
+        response_list = await generation_utils.call_text_model_with_retry_async(
+            provider=self.exp_config.provider,
+            model_name=self.model_name,
+            contents=content_list,
+            config={
+                "system_prompt": self.system_prompt,
+                "temperature": self.exp_config.temperature,
+                "candidate_num": 1,
+                "max_output_tokens": 50000,
+            },
+            max_attempts=3,
+            retry_delay=30,
+        )
 
         raw_response = response_list[0].strip()
         return self._parse_retrieval_result(raw_response, cfg["task_name"])

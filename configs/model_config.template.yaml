@@ -16,16 +16,36 @@
 
 # Default Models
 defaults:
-  model_name: "" # e.g., "gemini-3-pro-preview"
-  image_model_name: "" # e.g., "gemini-3-pro-image-preview"
+  # Text model for Retriever/Planner/Stylist/Critic and plot-code generation.
+  # Examples: "gemini-2.5-flash", "gpt-4.1", "gpt-4o"
+  model_name: ""
+  # Image model for diagram generation/polishing.
+  # Examples: "gemini-3.1-flash-image-preview", "gpt-image-2"
+  image_model_name: ""
   
-# API Keys. If you are using all gemini models, you can leave the other keys empty.
+# API Keys. Fill only the channels you use.
 api_keys:
   google_api_key: ""
   openai_api_key: ""
   anthropic_api_key: ""
 
+# AIPAIBOX OpenAI-compatible gateway（国内直连）
+aipaibox:
+  api_key: ""
+  base_url: "https://api.aipaibox.com"
+
+# Legacy OpenAI-compatible gateway config. Kept for old deployments.
+evolink:
+  api_key: ""
+  base_url: "https://api.evolink.ai"
+
 # Google Gemini endpoint（可选，支持代理/中转）
+# Leave base_url empty to use the official Google Gemini endpoint.
 google:
   base_url: ""
   api_version: ""
+
+# OpenAI endpoint（可选，支持代理/中转）
+# Leave base_url empty to use the official OpenAI endpoint.
+openai:
+  base_url: ""

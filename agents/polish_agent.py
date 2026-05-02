@@ -75,32 +75,19 @@ class PolishAgent(BaseAgent):
         ]
 
         try:
-            if self.exp_config.provider == "evolink":
-                response_list = await generation_utils.call_evolink_text_with_retry_async(
-                    model_name=self.text_model_name,
-                    contents=content_list,
-                    config={
-                        "system_prompt": self.suggestion_system_prompt,
-                        "temperature": 1,
-                        "max_output_tokens": 50000,
-                    },
-                    max_attempts=3,
-                    retry_delay=10,
-                )
-            else:
-                from google.genai import types
-                response_list = await generation_utils.call_gemini_with_retry_async(
-                    model_name=self.text_model_name,
-                    contents=content_list,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self.suggestion_system_prompt,
-                        temperature=1,
-                        candidate_count=1,
-                        max_output_tokens=50000,
-                    ),
-                    max_attempts=3,
-                    retry_delay=10,
-                )
+            response_list = await generation_utils.call_text_model_with_retry_async(
+                provider=self.exp_config.provider,
+                model_name=self.text_model_name,
+                contents=content_list,
+                config={
+                    "system_prompt": self.suggestion_system_prompt,
+                    "temperature": 1,
+                    "candidate_num": 1,
+                    "max_output_tokens": 50000,
+                },
+                max_attempts=3,
+                retry_delay=10,
+            )
             return response_list[0] if response_list else ""
         except Exception as e:
             print(f"❌ Error during suggestion generation: {e}")
@@ -159,42 +146,26 @@ class PolishAgent(BaseAgent):
         ]
 
         try:
-            if self.exp_config.provider == "evolink":
-                # Evolink 图像生成：先上传参考图获取 URL，再传给 image_urls
-                print(f"🎨 [Step 2a] 上传参考图到 Evolink 文件服务...")
-                ref_image_url = await generation_utils.upload_image_to_evolink(
-                    gt_image_b64, media_type="image/jpeg"
-                )
-                response_list = await generation_utils.call_evolink_image_with_retry_async(
-                    model_name=self.image_model_name,
-                    prompt=user_prompt,
-                    config={
-                        "aspect_ratio": data.get("additional_info", {}).get("rounded_ratio", "16:9"),
-                        "quality": "2K",
-                        "image_urls": [ref_image_url],
-                    },
-                    max_attempts=5,
-                    retry_delay=30,
-                )
-            else:
-                from google.genai import types
-                response_list = await generation_utils.call_gemini_with_retry_async(
-                    model_name=self.image_model_name,
-                    contents=content_list,
-                    config=types.GenerateContentConfig(
-                        system_instruction=self.system_prompt,
-                        temperature=self.exp_config.temperature,
-                        candidate_count=1,
-                        max_output_tokens=50000,
-                        response_modalities=["IMAGE"],
-                        image_config=types.ImageConfig(
-                            aspect_ratio=data.get("additional_info", {}).get("rounded_ratio", "16:9"),
-                            image_size="1k",
-                        ),
-                    ),
-                    max_attempts=5,
-                    retry_delay=30,
-                )
+            response_list = await generation_utils.call_image_model_with_retry_async(
+                provider=self.exp_config.provider,
+                model_name=self.image_model_name,
+                prompt=user_prompt,
+                contents=content_list,
+                system_prompt=(
+                    PLOT_POLISH_AGENT_SYSTEM_PROMPT
+                    if task_name == "plot"
+                    else DIAGRAM_POLISH_AGENT_SYSTEM_PROMPT
+                ),
+                temperature=self.exp_config.temperature,
+                config={
+                    "aspect_ratio": data.get("additional_info", {}).get("rounded_ratio", "16:9"),
+                    "quality": "2K" if generation_utils.is_gateway_provider(self.exp_config.provider) else "high",
+                    "image_size": "1k",
+                    "output_format": "png",
+                },
+                max_attempts=5,
+                retry_delay=30,
+            )
 
             if response_list and response_list[0]:
                 converted_jpg = image_utils.convert_png_b64_to_jpg_b64(response_list[0])

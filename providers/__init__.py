@@ -3,7 +3,6 @@ Provider 包 - 管理不同 API 提供商的接口
 """
 
 from .base import BaseProvider
-from .evolink import EvolinkProvider
 
 
 def create_provider(provider_name: str, **kwargs) -> BaseProvider:
@@ -17,14 +16,13 @@ def create_provider(provider_name: str, **kwargs) -> BaseProvider:
     Returns:
         BaseProvider 实例
     """
-    providers = {
-        "evolink": EvolinkProvider,
-    }
+    normalized_name = provider_name.lower()
+    if normalized_name in {"aipaibox", "evolink", "gateway"}:
+        from .evolink import EvolinkProvider
+        return EvolinkProvider(**kwargs)
 
-    if provider_name not in providers:
+    if normalized_name not in {"aipaibox", "evolink", "gateway"}:
         raise ValueError(
             f"未知的 provider: {provider_name}。"
-            f"可用的 provider: {list(providers.keys())}"
+            "可用的 provider: ['aipaibox', 'evolink', 'gateway']"
         )
-
-    return providers[provider_name](**kwargs)

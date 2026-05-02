@@ -43,7 +43,7 @@ class TestEvolinkProviderInit:
 
     def test_init_default_base_url(self):
         p = EvolinkProvider(api_key="sk-abc")
-        assert p.base_url == "https://api.evolink.ai"
+        assert p.base_url == "https://api.aipaibox.com"
 
     def test_headers_contain_auth(self):
         p = make_provider(api_key="sk-test")
@@ -408,14 +408,14 @@ class TestExpConfigProvider:
         from utils.config import ExpConfig
         config = ExpConfig(
             dataset_name="PaperBananaBench",
-            provider="evolink",
+            provider="aipaibox",
         )
-        assert config.provider == "evolink"
+        assert config.provider == "aipaibox"
 
     def test_config_default_provider(self):
         from utils.config import ExpConfig
         config = ExpConfig(dataset_name="PaperBananaBench")
-        assert config.provider == "evolink"  # 默认使用 evolink
+        assert config.provider == "auto"  # 默认自动选择可用通道
 
 
 # ==================== Agent 路由测试 ====================

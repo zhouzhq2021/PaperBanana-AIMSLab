@@ -36,7 +36,7 @@ class ExpConfig:
     max_critic_rounds: int = 3
     model_name: str = ""
     image_model_name: str = ""
-    provider: str = "evolink"
+    provider: str = "auto"
     work_dir: Path = Path(__file__).parent.parent
 
     timestamp: str | None = None
@@ -51,12 +51,15 @@ class ExpConfig:
             import yaml
             config_path = self.work_dir / "configs" / "model_config.yaml"
             if config_path.exists():
-                with open(config_path, "r", encoding="utf-8") as f:
-                    model_config_data = yaml.safe_load(f) or {}
-                    if not self.model_name:
-                        self.model_name = model_config_data.get("defaults", {}).get("model_name", "")
-                    if not self.image_model_name:
-                        self.image_model_name = model_config_data.get("defaults", {}).get("image_model_name", "")
+                try:
+                    with open(config_path, "r", encoding="utf-8") as f:
+                        model_config_data = yaml.safe_load(f) or {}
+                        if not self.model_name:
+                            self.model_name = model_config_data.get("defaults", {}).get("model_name", "")
+                        if not self.image_model_name:
+                            self.image_model_name = model_config_data.get("defaults", {}).get("image_model_name", "")
+                except yaml.YAMLError as e:
+                    print(f"警告：配置文件 {config_path} 解析失败，将使用命令行参数或默认值。错误：{e}")
         self.timestamp = (
             time.strftime("%m%d_%H%M") if self.timestamp is None else self.timestamp
         )
