@@ -16,6 +16,7 @@ from .base import BaseProvider
 DEBUG_LOGS = os.getenv("PAPERBANANA_DEBUG", "").lower() in {"1", "true", "yes", "on"}
 TEXT_RETRY_MAX_DELAY = float(os.getenv("PAPERBANANA_AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY", "120"))
 IMAGE_RETRY_MAX_DELAY = float(os.getenv("PAPERBANANA_AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY", "180"))
+GPT_IMAGE_GATEWAY_TIMEOUT = float(os.getenv("PAPERBANANA_GPT_IMAGE_GATEWAY_TIMEOUT", "360"))
 
 
 def _debug_log(message: str):
@@ -25,6 +26,10 @@ def _debug_log(message: str):
 
 def _retry_backoff_delay(base_delay: float, attempt: int, max_delay: float) -> float:
     return min(base_delay * (2 ** attempt), max_delay)
+
+
+def _is_gpt_image_model(model_name: str = "") -> bool:
+    return (model_name or "").lower().startswith("gpt-image")
 
 
 class ClientError(Exception):
@@ -177,7 +182,7 @@ class EvolinkProvider(BaseProvider):
 
     # ==================== HTTP 请求封装 ====================
 
-    async def _post_json(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def _post_json(self, url: str, payload: Dict[str, Any], timeout: float = 120) -> Dict[str, Any]:
         """发送 POST 请求并返回 JSON 响应"""
         _debug_log(f"[DEBUG] [API Gateway] POST {url}")
         _debug_log(f"[DEBUG] [API Gateway]   model={payload.get('model', 'N/A')}, payload keys={list(payload.keys())}")
@@ -186,7 +191,7 @@ class EvolinkProvider(BaseProvider):
             url,
             json=payload,
             headers=self._get_headers(),
-            timeout=aiohttp.ClientTimeout(total=120),
+            timeout=aiohttp.ClientTimeout(total=timeout),
         ) as resp:
             status = resp.status
             body = await resp.json()
@@ -226,6 +231,26 @@ class EvolinkProvider(BaseProvider):
         except Exception as e:
             print(f"下载图片失败 ({url}): {e}")
             return None
+
+    async def _extract_direct_image_response(self, response: Dict[str, Any]) -> Optional[str]:
+        """Extract OpenAI-style image responses that do not return async task IDs."""
+        data = response.get("data", [])
+        if not isinstance(data, list) or not data:
+            return None
+
+        first_item = data[0]
+        if not isinstance(first_item, dict):
+            return None
+
+        b64_image = first_item.get("b64_json")
+        if b64_image:
+            return b64_image
+
+        image_url = first_item.get("url")
+        if image_url:
+            return await self._download_image_as_base64(image_url)
+
+        return None
 
     # ==================== 文件上传 ====================
 
@@ -366,6 +391,11 @@ class EvolinkProvider(BaseProvider):
         if image_urls:
             _debug_log(f"[DEBUG] [API Gateway 图像]   附带 {len(image_urls)} 张参考图片")
         _debug_log(f"[DEBUG] [API Gateway 图像]   prompt 长度={len(prompt)}, 前100字: {prompt[:100]}...")
+        if _is_gpt_image_model(model_name):
+            max_polls = max(max_polls, int(GPT_IMAGE_GATEWAY_TIMEOUT / max(poll_interval, 1)))
+            request_timeout = GPT_IMAGE_GATEWAY_TIMEOUT
+        else:
+            request_timeout = 120
 
         for attempt in range(max_attempts):
             try:
@@ -377,11 +407,21 @@ class EvolinkProvider(BaseProvider):
                     quality=quality,
                     image_urls=image_urls,
                 )
-                create_response = await self._post_json(create_url, payload)
+                if _is_gpt_image_model(model_name):
+                    create_response = await self._post_json(
+                        create_url, payload, timeout=request_timeout
+                    )
+                else:
+                    create_response = await self._post_json(create_url, payload)
                 task_id = create_response.get("id")
 
                 if not task_id:
-                    print(f"[API Gateway 图像] 创建任务失败，未返回任务 ID")
+                    direct_image = await self._extract_direct_image_response(create_response)
+                    if direct_image:
+                        print("[API Gateway 图像] 直接返回图像结果")
+                        return [direct_image]
+
+                    print("[API Gateway 图像] 未返回任务 ID 或图像结果，等待后重试")
                     if attempt < max_attempts - 1:
                         await asyncio.sleep(
                             _retry_backoff_delay(retry_delay, attempt, IMAGE_RETRY_MAX_DELAY)

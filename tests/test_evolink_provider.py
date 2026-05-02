@@ -325,6 +325,51 @@ class TestImageGeneration:
         assert "image_urls" in captured_payload
         assert captured_payload["image_urls"] == ["https://example.com/ref.png"]
 
+    @pytest.mark.asyncio
+    async def test_gpt_image_direct_b64_response(self):
+        """gpt-image-* gateway responses may be OpenAI-style synchronous results."""
+        p = make_provider()
+        image_b64 = make_png_base64()
+        direct_response = {"data": [{"b64_json": image_b64}]}
+
+        async def capture_post(url, payload, timeout=120):
+            assert timeout == 360
+            return direct_response
+
+        with patch.object(p, '_post_json', side_effect=capture_post):
+            result = await p.generate_image(
+                model_name="gpt-image-2",
+                prompt="Test",
+                aspect_ratio="1824x1024",
+                quality="high",
+                max_attempts=1,
+                retry_delay=0,
+                poll_interval=0,
+            )
+
+        assert result == [image_b64]
+
+    @pytest.mark.asyncio
+    async def test_gpt_image_direct_url_response(self):
+        """Direct URL responses should be downloaded and converted to base64."""
+        p = make_provider()
+        image_b64 = make_png_base64()
+        direct_response = {"data": [{"url": "https://example.com/result.png"}]}
+
+        with patch.object(p, '_post_json', new_callable=AsyncMock, return_value=direct_response), \
+             patch.object(p, '_download_image_as_base64', new_callable=AsyncMock, return_value=image_b64):
+            result = await p.generate_image(
+                model_name="gpt-image-2",
+                prompt="Test",
+                aspect_ratio="1824x1024",
+                quality="high",
+                max_attempts=1,
+                retry_delay=0,
+                poll_interval=0,
+            )
+
+        assert result == [image_b64]
+
 
 # ==================== 请求构建测试 ====================
 
