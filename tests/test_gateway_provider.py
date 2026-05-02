@@ -1,5 +1,5 @@
 """
-Evolink Provider 单元测试
+Gateway Provider 单元测试
 测试文本生成和图像生成的核心逻辑
 """
 
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from providers.evolink import EvolinkProvider
+from providers.gateway import GatewayProvider
 
 
 # ==================== 辅助函数 ====================
@@ -29,20 +29,20 @@ def make_png_base64():
 
 
 def make_provider(api_key="test-key", base_url="https://api.evolink.ai"):
-    """创建 EvolinkProvider 实例"""
-    return EvolinkProvider(api_key=api_key, base_url=base_url)
+    """创建 GatewayProvider 实例"""
+    return GatewayProvider(api_key=api_key, base_url=base_url)
 
 
 # ==================== 初始化测试 ====================
 
-class TestEvolinkProviderInit:
+class TestGatewayProviderInit:
     def test_init_with_params(self):
         p = make_provider(api_key="sk-abc", base_url="https://example.com")
         assert p.api_key == "sk-abc"
         assert p.base_url == "https://example.com"
 
     def test_init_default_base_url(self):
-        p = EvolinkProvider(api_key="sk-abc")
+        p = GatewayProvider(api_key="sk-abc")
         assert p.base_url == "https://api.aipaibox.com"
 
     def test_headers_contain_auth(self):
@@ -370,6 +370,50 @@ class TestImageGeneration:
 
         assert result == [image_b64]
 
+    @pytest.mark.asyncio
+    async def test_gemini_image_uses_generate_content_endpoint(self):
+        """Gemini image preview on AIPAIBOX should use Gemini generateContent endpoint."""
+        p = make_provider(base_url="https://api.aipaibox.com")
+        image_b64 = make_png_base64()
+        response = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inline_data": {
+                                    "mime_type": "image/png",
+                                    "data": image_b64,
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        captured = {}
+
+        async def capture_post(url, payload, timeout=120):
+            captured["url"] = url
+            captured["payload"] = payload
+            return response
+
+        with patch.object(p, '_post_json', side_effect=capture_post):
+            result = await p.generate_image(
+                model_name="gemini-3.1-flash-image-preview",
+                prompt="Test diagram",
+                aspect_ratio="21:9",
+                quality="2K",
+                max_attempts=1,
+                retry_delay=0,
+                poll_interval=0,
+            )
+
+        assert captured["url"] == "https://api.aipaibox.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent"
+        assert captured["payload"]["contents"][0]["parts"][0]["text"] == "Test diagram"
+        assert captured["payload"]["generationConfig"]["responseModalities"] == ["IMAGE"]
+        assert result == [image_b64]
+
 
 # ==================== 请求构建测试 ====================
 
@@ -470,22 +514,22 @@ class TestGenerationUtilsIntegration:
         assert generation_utils._gateway_quality_for_model("gemini-3.1-flash-image-preview", {"quality": "2K"}) == "2K"
 
     @pytest.mark.asyncio
-    async def test_call_evolink_text_routes_correctly(self):
-        """测试 generation_utils 中的 evolink 文本调用"""
+    async def test_call_gateway_text_routes_correctly(self):
+        """测试 generation_utils 中的 gateway 文本调用"""
         from utils import generation_utils
 
         mock_response = {
             "choices": [{"message": {"content": "test response"}}]
         }
 
-        with patch('providers.evolink.EvolinkProvider._post_json',
+        with patch('providers.gateway.GatewayProvider._post_json',
                     new_callable=AsyncMock, return_value=mock_response):
             # 验证函数存在且可调用
             assert hasattr(generation_utils, 'call_evolink_text_with_retry_async')
 
     @pytest.mark.asyncio
-    async def test_call_evolink_image_routes_correctly(self):
-        """测试 generation_utils 中的 evolink 图像调用"""
+    async def test_call_gateway_image_routes_correctly(self):
+        """测试 generation_utils 中的 gateway 图像调用"""
         from utils import generation_utils
 
         assert hasattr(generation_utils, 'call_evolink_image_with_retry_async')
@@ -511,7 +555,7 @@ class TestExpConfigProvider:
 # ==================== Agent 路由测试 ====================
 
 class TestAgentRouting:
-    """测试 agent 能正确根据 provider 路由到 evolink"""
+    """测试 agent 能正确根据 provider 路由到 gateway"""
 
     def test_planner_uses_evolink_when_configured(self):
         from utils.config import ExpConfig

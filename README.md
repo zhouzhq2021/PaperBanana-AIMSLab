@@ -116,6 +116,8 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 
 在界面侧边栏选择文本模型和图像模型即可；系统会根据可用 API Key 自动选择通道，遇到超时或返回 `Error` 时会尝试切换到下一条可用通道。
 
+图像模型在网关侧会自动区分端点：`gpt-image-2` 使用 OpenAI-compatible `/v1/images/generations`，`gemini-3.1-flash-image-preview` 使用 Gemini `/v1beta/models/{model}:generateContent`，避免不同模型误打到错误接口。
+
 > **说明**：本工具与 AIPAIBOX/Evolink 无任何商业关联，仅作为内置的国内可用 API 方案提供。项目采用 Provider 抽象架构（见 `providers/` 目录），你可以自行集成任何兼容 OpenAI 接口的 API 服务商。
 
 ---
@@ -257,7 +259,7 @@ A: 已修复。请拉取最新代码（`git pull`）即可解决。
 A: macOS 在终端按 `Ctrl+C`；Windows 关闭命令行窗口即可。
 
 **Q: 如何集成其他 API 服务商？**
-A: 参照 `providers/base.py` 定义的接口，实现 `generate_text()` 和 `generate_image()` 两个方法即可。可以参考 `providers/evolink.py` 的实现。
+A: 参照 `providers/base.py` 定义的接口，实现 `generate_text()` 和 `generate_image()` 两个方法即可。可以参考 `providers/gateway.py` 的实现；`providers/evolink.py` 仅保留为旧导入路径兼容层。
 
 ---
 

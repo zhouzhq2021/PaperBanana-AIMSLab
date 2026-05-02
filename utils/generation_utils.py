@@ -306,8 +306,8 @@ def _resolve_gateway_provider(provider: str = "gateway", model_name: str = ""):
 
 
 def _new_gateway_provider(api_key: str, base_url: str):
-    from providers.evolink import EvolinkProvider
-    return EvolinkProvider(api_key=api_key, base_url=base_url)
+    from providers.gateway import GatewayProvider
+    return GatewayProvider(api_key=api_key, base_url=base_url)
 
 aipaibox_base_url = get_config_val(
     "aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"
