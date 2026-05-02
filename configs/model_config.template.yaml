@@ -18,10 +18,10 @@
 defaults:
   # Text model for Retriever/Planner/Stylist/Critic and plot-code generation.
   # Examples: "gemini-2.5-flash", "gpt-5.5", "gpt-5.4"
-  model_name: ""
+  model_name: "gpt-5.5"
   # Image model for diagram generation/polishing.
   # Examples: "gemini-3.1-flash-image-preview", "gpt-image-2"
-  image_model_name: ""
+  image_model_name: "gpt-image-2"
   
 # API Keys. Fill only the channels you use.
 api_keys:
@@ -31,6 +31,11 @@ api_keys:
 
 # AIPAIBOX OpenAI-compatible gateway（国内直连）
 aipaibox:
+  # Gemini 系列模型通过 AIPAIBOX 调用时使用此 key。
+  gemini_api_key: ""
+  # GPT/OpenAI 系列模型和 gpt-image-2 通过 AIPAIBOX 调用时使用此 key。
+  openai_api_key: ""
+  # 兼容旧配置：如果未配置上面两个专用 key，则使用此 key 作为通用 fallback。
   api_key: ""
   base_url: "https://api.aipaibox.com"
 

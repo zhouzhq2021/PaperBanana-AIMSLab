@@ -69,7 +69,6 @@ DEFAULT_TEXT_MODEL_FALLBACKS = [
     "gpt-5.5",
     "gpt-5.4",
     "gemini-2.5-flash",
-    "gemini-2.5-pro",
 ]
 TEXT_MODEL_FALLBACKS = [
     item.strip()
@@ -124,10 +123,10 @@ def _is_bad_response(result) -> bool:
     return all((not item) or str(item).strip() == "Error" for item in result)
 
 
-def _is_provider_available(provider: str, kind: str) -> bool:
+def _is_provider_available(provider: str, kind: str, model_name: str = "") -> bool:
     provider_name = _normalize_provider(provider)
     if is_gateway_provider(provider_name):
-        return evolink_provider is not None
+        return _resolve_gateway_provider(provider_name, model_name) is not None
     if provider_name == "gemini":
         return gemini_client is not None
     if provider_name == "openai":
@@ -221,47 +220,146 @@ def _extract_text_config(config) -> Dict[str, Any]:
 # ==================== OpenAI-compatible Gateway Provider 初始化 ====================
 
 evolink_provider = None
+aipaibox_providers: Dict[str, Any] = {}
+legacy_gateway_provider = None
 
+
+def _gateway_family_for_model(model_name: str = "") -> str:
+    if is_gemini_model(model_name):
+        return "gemini"
+    if is_openai_text_model(model_name) or is_openai_image_model(model_name):
+        return "openai"
+    return "default"
+
+
+def _first_gateway_provider():
+    return (
+        aipaibox_providers.get("default")
+        or aipaibox_providers.get("gemini")
+        or aipaibox_providers.get("openai")
+        or legacy_gateway_provider
+    )
+
+
+def _refresh_gateway_alias():
+    """Keep the old evolink_provider name usable for compatibility and cleanup."""
+    global evolink_provider
+    evolink_provider = _first_gateway_provider()
+
+
+def _resolve_gateway_provider(provider: str = "gateway", model_name: str = ""):
+    provider_name = _normalize_provider(provider)
+    if provider_name == "aipaibox":
+        family = _gateway_family_for_model(model_name)
+        if family == "default":
+            return (
+                aipaibox_providers.get("default")
+                or aipaibox_providers.get("openai")
+                or aipaibox_providers.get("gemini")
+            )
+        return aipaibox_providers.get(family) or aipaibox_providers.get("default")
+    if provider_name == "evolink":
+        return legacy_gateway_provider
+    if provider_name == "gateway":
+        return _resolve_gateway_provider("aipaibox", model_name) or legacy_gateway_provider
+    return None
+
+
+def _new_gateway_provider(api_key: str, base_url: str):
+    from providers.evolink import EvolinkProvider
+    return EvolinkProvider(api_key=api_key, base_url=base_url)
+
+aipaibox_base_url = get_config_val(
+    "aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"
+)
 aipaibox_api_key = get_config_val("aipaibox", "api_key", "AIPAIBOX_API_KEY", "")
+aipaibox_gemini_api_key = get_first_config_val(
+    ("aipaibox", "gemini_api_key", "AIPAIBOX_GEMINI_API_KEY"),
+    ("aipaibox", "api_key", "AIPAIBOX_API_KEY"),
+    default="",
+)
+aipaibox_openai_api_key = get_first_config_val(
+    ("aipaibox", "openai_api_key", "AIPAIBOX_OPENAI_API_KEY"),
+    ("aipaibox", "api_key", "AIPAIBOX_API_KEY"),
+    default="",
+)
 legacy_evolink_api_key = get_config_val("evolink", "api_key", "EVOLINK_API_KEY", "")
-evolink_api_key = aipaibox_api_key or legacy_evolink_api_key
-if aipaibox_api_key:
-    evolink_base_url = get_config_val(
-        "aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"
-    )
-else:
-    evolink_base_url = get_config_val(
-        "evolink", "base_url", "EVOLINK_BASE_URL", "https://api.aipaibox.com"
-    )
+legacy_gateway_base_url = get_config_val(
+    "evolink", "base_url", "EVOLINK_BASE_URL", "https://api.evolink.ai"
+)
 
-if evolink_api_key:
-    try:
-        from providers.evolink import EvolinkProvider
-        evolink_provider = EvolinkProvider(api_key=evolink_api_key, base_url=evolink_base_url)
-        print(f"已初始化 API Gateway Provider (base_url={evolink_base_url})")
-    except ImportError:
-        print("警告：未安装 aiohttp，API Gateway Provider 不可用。请运行 pip install aiohttp")
-else:
+try:
+    if aipaibox_api_key:
+        aipaibox_providers["default"] = _new_gateway_provider(aipaibox_api_key, aipaibox_base_url)
+    if aipaibox_gemini_api_key and aipaibox_gemini_api_key != aipaibox_api_key:
+        aipaibox_providers["gemini"] = _new_gateway_provider(aipaibox_gemini_api_key, aipaibox_base_url)
+    if aipaibox_openai_api_key and aipaibox_openai_api_key != aipaibox_api_key:
+        aipaibox_providers["openai"] = _new_gateway_provider(aipaibox_openai_api_key, aipaibox_base_url)
+    if legacy_evolink_api_key:
+        legacy_gateway_provider = _new_gateway_provider(legacy_evolink_api_key, legacy_gateway_base_url)
+    _refresh_gateway_alias()
+    if aipaibox_providers:
+        configured_families = ", ".join(sorted(aipaibox_providers.keys()))
+        print(f"已初始化 AIPAIBOX Gateway Provider ({configured_families}, base_url={aipaibox_base_url})")
+    if legacy_gateway_provider:
+        print(f"已初始化 Evolink Gateway Provider (base_url={legacy_gateway_base_url})")
+except ImportError:
+    print("警告：未安装 aiohttp，API Gateway Provider 不可用。请运行 pip install aiohttp")
+
+if not _first_gateway_provider():
     print("警告：未配置 AIPAIBOX/EVOLINK API Key，API Gateway Provider 不可用。")
 
 
 def init_evolink_provider(api_key: str, base_url: str = ""):
-    """用指定的 API Key 初始化或更新 OpenAI-compatible Gateway Provider（供界面动态传入）。"""
-    global evolink_provider
+    """用指定的 API Key 初始化或更新 Legacy OpenAI-compatible Gateway Provider。"""
+    global legacy_gateway_provider
     if not api_key:
         return
-    url = base_url or evolink_base_url
+    url = base_url or legacy_gateway_base_url
     try:
-        from providers.evolink import EvolinkProvider
-        evolink_provider = EvolinkProvider(api_key=api_key, base_url=url)
-        print(f"已通过界面初始化 API Gateway Provider (base_url={url})")
+        legacy_gateway_provider = _new_gateway_provider(api_key, url)
+        _refresh_gateway_alias()
+        print(f"已通过界面初始化 Evolink Gateway Provider (base_url={url})")
     except ImportError:
         print("警告：未安装 aiohttp，API Gateway Provider 不可用。请运行 pip install aiohttp")
 
 
-def init_aipaibox_provider(api_key: str, base_url: str = ""):
-    """AIPAIBOX 初始化别名。"""
-    init_evolink_provider(api_key, base_url or "https://api.aipaibox.com")
+def init_aipaibox_provider(
+    api_key: str = "",
+    base_url: str = "",
+    gemini_api_key: str = "",
+    openai_api_key: str = "",
+):
+    """初始化或更新 AIPAIBOX Provider，支持 Gemini/OpenAI 模型使用不同 key。"""
+    global aipaibox_providers
+    url = base_url or aipaibox_base_url
+    if not any([api_key, gemini_api_key, openai_api_key]):
+        return
+    try:
+        updated = {}
+        if api_key:
+            updated["default"] = _new_gateway_provider(api_key, url)
+        if gemini_api_key:
+            updated["gemini"] = _new_gateway_provider(gemini_api_key, url)
+        if openai_api_key:
+            updated["openai"] = _new_gateway_provider(openai_api_key, url)
+        aipaibox_providers.update(updated)
+        _refresh_gateway_alias()
+        configured_families = ", ".join(sorted(updated.keys()))
+        print(f"已通过界面初始化 AIPAIBOX Gateway Provider ({configured_families}, base_url={url})")
+    except ImportError:
+        print("警告：未安装 aiohttp，API Gateway Provider 不可用。请运行 pip install aiohttp")
+
+
+async def close_gateway_providers():
+    """Close all initialized gateway sessions once a Streamlit run finishes."""
+    seen = set()
+    providers = [*aipaibox_providers.values(), legacy_gateway_provider]
+    for provider in providers:
+        if provider is None or id(provider) in seen or not hasattr(provider, "close"):
+            continue
+        seen.add(id(provider))
+        await provider.close()
 
 
 google_base_url = get_config_val("google", "base_url", "GOOGLE_BASE_URL", "")
@@ -376,7 +474,7 @@ def init_openai_client(api_key: str, base_url: str = ""):
 # ==================== API Gateway 调用函数 ====================
 
 async def call_evolink_text_with_retry_async(
-    model_name, contents, config, max_attempts=5, retry_delay=5, error_context=""
+    model_name, contents, config, max_attempts=5, retry_delay=5, error_context="", provider_name="gateway"
 ):
     """
     通过 OpenAI-compatible API Gateway Provider 进行文本生成。
@@ -389,9 +487,16 @@ async def call_evolink_text_with_retry_async(
         retry_delay: 重试间隔
         error_context: 错误上下文
     """
-    _debug_log(f"[DEBUG] call_api_gateway_text: model={model_name}, provider={'已初始化' if evolink_provider else '未初始化'}")
-    if evolink_provider is None:
-        raise RuntimeError("API Gateway Provider 未初始化，请检查 AIPAIBOX_API_KEY/EVOLINK_API_KEY 配置。")
+    gateway_provider = _resolve_gateway_provider(provider_name, model_name)
+    _debug_log(
+        f"[DEBUG] call_api_gateway_text: model={model_name}, provider={provider_name}, "
+        f"state={'已初始化' if gateway_provider else '未初始化'}"
+    )
+    if gateway_provider is None:
+        raise RuntimeError(
+            "API Gateway Provider 未初始化，请检查 AIPAIBOX_GEMINI_API_KEY/"
+            "AIPAIBOX_OPENAI_API_KEY/EVOLINK_API_KEY 配置。"
+        )
 
     # 从 config 中提取参数（兼容 types.GenerateContentConfig 和 dict）
     if hasattr(config, 'system_instruction'):
@@ -410,7 +515,7 @@ async def call_evolink_text_with_retry_async(
         max_output_tokens = 50000
         _debug_log(f"[DEBUG] call_api_gateway_text: 使用默认参数, config type={type(config)}")
 
-    return await evolink_provider.generate_text(
+    return await gateway_provider.generate_text(
         model_name=model_name,
         contents=contents,
         system_prompt=system_prompt,
@@ -422,23 +527,32 @@ async def call_evolink_text_with_retry_async(
     )
 
 
-async def upload_image_to_evolink(image_b64: str, media_type: str = "image/jpeg") -> str:
+async def upload_image_to_evolink(
+    image_b64: str,
+    media_type: str = "image/jpeg",
+    model_name: str = "",
+    provider_name: str = "gateway",
+) -> str:
     """
     将 base64 图片上传到 API Gateway 文件服务，返回可访问的 URL。
 
     用于 image-to-image 场景（如 Polish Agent），需要先把本地 base64 图片
     上传为 URL，才能传给图像生成 API 的 image_urls 参数。
     """
-    if evolink_provider is None:
-        raise RuntimeError("API Gateway Provider 未初始化，请检查 AIPAIBOX_API_KEY/EVOLINK_API_KEY 配置。")
-    url = await evolink_provider.upload_image_base64(image_b64, media_type)
+    gateway_provider = _resolve_gateway_provider(provider_name, model_name)
+    if gateway_provider is None:
+        raise RuntimeError(
+            "API Gateway Provider 未初始化，请检查 AIPAIBOX_GEMINI_API_KEY/"
+            "AIPAIBOX_OPENAI_API_KEY/EVOLINK_API_KEY 配置。"
+        )
+    url = await gateway_provider.upload_image_base64(image_b64, media_type)
     if not url:
         raise RuntimeError("图片上传到 API Gateway 文件服务失败")
     return url
 
 
 async def call_evolink_image_with_retry_async(
-    model_name, prompt, config, max_attempts=5, retry_delay=30, error_context=""
+    model_name, prompt, config, max_attempts=5, retry_delay=30, error_context="", provider_name="gateway"
 ):
     """
     通过 OpenAI-compatible API Gateway Provider 进行图像生成。
@@ -451,15 +565,22 @@ async def call_evolink_image_with_retry_async(
         retry_delay: 重试间隔
         error_context: 错误上下文
     """
-    _debug_log(f"[DEBUG] call_api_gateway_image: model={model_name}, config={config}, provider={'已初始化' if evolink_provider else '未初始化'}")
-    if evolink_provider is None:
-        raise RuntimeError("API Gateway Provider 未初始化，请检查 AIPAIBOX_API_KEY/EVOLINK_API_KEY 配置。")
+    gateway_provider = _resolve_gateway_provider(provider_name, model_name)
+    _debug_log(
+        f"[DEBUG] call_api_gateway_image: model={model_name}, config={config}, provider={provider_name}, "
+        f"state={'已初始化' if gateway_provider else '未初始化'}"
+    )
+    if gateway_provider is None:
+        raise RuntimeError(
+            "API Gateway Provider 未初始化，请检查 AIPAIBOX_GEMINI_API_KEY/"
+            "AIPAIBOX_OPENAI_API_KEY/EVOLINK_API_KEY 配置。"
+        )
 
     aspect_ratio = config.get("aspect_ratio", "16:9")
     quality = config.get("quality", "2K")
     image_urls = config.get("image_urls", None)
 
-    return await evolink_provider.generate_image(
+    return await gateway_provider.generate_image(
         model_name=model_name,
         prompt=prompt,
         aspect_ratio=aspect_ratio,
@@ -613,7 +734,11 @@ def _extract_openai_image_files(contents: Optional[List[Dict[str, Any]]]) -> Lis
     return image_files
 
 
-async def _upload_content_images_to_gateway(contents: Optional[List[Dict[str, Any]]]) -> List[str]:
+async def _upload_content_images_to_gateway(
+    contents: Optional[List[Dict[str, Any]]],
+    model_name: str = "",
+    provider_name: str = "gateway",
+) -> List[str]:
     image_urls = []
     if not contents:
         return image_urls
@@ -629,7 +754,14 @@ async def _upload_content_images_to_gateway(contents: Optional[List[Dict[str, An
         elif "image_base64" in item:
             image_b64 = item.get("image_base64", "")
         if image_b64:
-            image_urls.append(await upload_image_to_evolink(image_b64, media_type))
+            image_urls.append(
+                await upload_image_to_evolink(
+                    image_b64,
+                    media_type,
+                    model_name=model_name,
+                    provider_name=provider_name,
+                )
+            )
 
     return image_urls
 
@@ -641,6 +773,34 @@ def _openai_size_from_aspect_ratio(aspect_ratio: str = "16:9") -> str:
     if ratio in {"2:3", "3:4", "9:16"}:
         return "1024x1536"
     return "1536x1024"
+
+
+def _gateway_openai_size_from_aspect_ratio(aspect_ratio: str = "16:9") -> str:
+    """AIPAIBOX gpt-image-* expects WIDTHxHEIGHT instead of ratio strings."""
+    ratio = (aspect_ratio or "").strip().lower()
+    if re.match(r"^\d+x\d+$", ratio):
+        return ratio
+
+    return {
+        "1:1": "1024x1024",
+        "square": "1024x1024",
+        "21:9": "1824x784",
+        "16:9": "1824x1024",
+        "3:2": "1536x1024",
+        "4:3": "1368x1024",
+        "2:3": "1024x1536",
+        "3:4": "1024x1368",
+        "9:16": "1024x1824",
+    }.get(ratio, _openai_size_from_aspect_ratio(ratio))
+
+
+def _gateway_quality_for_model(model_name: str, cfg: Dict[str, Any]) -> str:
+    if is_openai_image_model(model_name):
+        quality = cfg.get("openai_quality") or cfg.get("quality") or "high"
+        return quality if quality in OPENAI_IMAGE_QUALITIES else "high"
+    return cfg.get("gateway_quality") or (
+        "2K" if cfg.get("quality", "2K") in OPENAI_IMAGE_QUALITIES else cfg.get("quality", "2K")
+    )
 
 
 async def call_claude_with_retry_async(
@@ -890,7 +1050,7 @@ async def call_text_model_with_retry_async(
                 print(f"[自动通道] 文本模型 {model_name} 失败后，尝试备用模型 {current_model}")
             candidates = _text_provider_candidates(current_model)
             for candidate in candidates:
-                if not _is_provider_available(candidate, kind="text"):
+                if not _is_provider_available(candidate, kind="text", model_name=current_model):
                     _debug_log(f"[自动通道] 跳过文本通道 {candidate}: 未配置或未初始化")
                     continue
                 if not _is_provider_healthy(candidate, kind="text", model_name=current_model):
@@ -929,6 +1089,7 @@ async def call_text_model_with_retry_async(
             max_attempts=max_attempts,
             retry_delay=retry_delay,
             error_context=error_context,
+            provider_name=provider_name,
         )
 
     if provider_name == "openai" or is_openai_text_model(model_name):
@@ -1000,7 +1161,7 @@ async def call_image_model_with_retry_async(
         candidates = _image_provider_candidates(model_name)
         attempted = []
         for candidate in candidates:
-            if not _is_provider_available(candidate, kind="image"):
+            if not _is_provider_available(candidate, kind="image", model_name=model_name):
                 _debug_log(f"[自动通道] 跳过图像通道 {candidate}: 未配置或未初始化")
                 continue
             if not _is_provider_healthy(candidate, kind="image", model_name=model_name):
@@ -1036,23 +1197,26 @@ async def call_image_model_with_retry_async(
     if is_gateway_provider(provider_name):
         image_urls = cfg.get("image_urls")
         if not image_urls and contents:
-            image_urls = await _upload_content_images_to_gateway(contents)
+            image_urls = await _upload_content_images_to_gateway(
+                contents,
+                model_name=model_name,
+                provider_name=provider_name,
+            )
+        gateway_size = cfg.get("size") or cfg.get("aspect_ratio", "16:9")
+        if is_openai_image_model(model_name):
+            gateway_size = _gateway_openai_size_from_aspect_ratio(gateway_size)
         return await call_evolink_image_with_retry_async(
             model_name=model_name,
             prompt=prompt,
             config={
-                "aspect_ratio": cfg.get("aspect_ratio", cfg.get("size", "16:9")),
-                "quality": cfg.get("gateway_quality")
-                or (
-                    "2K"
-                    if cfg.get("quality", "2K") in OPENAI_IMAGE_QUALITIES
-                    else cfg.get("quality", "2K")
-                ),
+                "aspect_ratio": gateway_size,
+                "quality": _gateway_quality_for_model(model_name, cfg),
                 "image_urls": image_urls,
             },
             max_attempts=max_attempts,
             retry_delay=retry_delay,
             error_context=error_context,
+            provider_name=provider_name,
         )
 
     if provider_name == "openai" or is_openai_image_model(model_name):

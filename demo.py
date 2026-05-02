@@ -145,7 +145,6 @@ TEXT_MODEL_OPTIONS = [
     "gpt-5.5",
     "gpt-5.4",
     "gemini-2.5-flash",
-    "gemini-2.5-pro",
     "自定义...",
 ]
 
@@ -201,13 +200,17 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
 
     # 初始化所有可用通道；实际调用时由 provider="auto" 根据模型和失败情况选择。
     aipaibox_key = api_keys.get("aipaibox", "")
+    aipaibox_gemini_key = api_keys.get("aipaibox_gemini", "")
+    aipaibox_openai_key = api_keys.get("aipaibox_openai", "")
     evolink_key = api_keys.get("evolink", "")
     google_key = api_keys.get("google", "")
     openai_key = api_keys.get("openai", "")
 
-    if aipaibox_key:
-        generation_utils.init_evolink_provider(
-            aipaibox_key,
+    if any([aipaibox_key, aipaibox_gemini_key, aipaibox_openai_key]):
+        generation_utils.init_aipaibox_provider(
+            api_key=aipaibox_key,
+            gemini_api_key=aipaibox_gemini_key,
+            openai_api_key=aipaibox_openai_key,
             base_url=get_config_val("aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"),
         )
     elif evolink_key:
@@ -221,7 +224,7 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
     if openai_key:
         generation_utils.init_openai_client(openai_key)
 
-    if not any([aipaibox_key, evolink_key, google_key, openai_key]):
+    if not any([aipaibox_key, aipaibox_gemini_key, aipaibox_openai_key, evolink_key, google_key, openai_key]):
         print("[DEBUG] ⚠️ 未提供 API Key，将仅使用配置文件/环境变量中已初始化的通道")
 
     # 创建实验配置
@@ -259,9 +262,11 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
         ):
             results.append(result_data)
     finally:
-        # 关闭 Evolink Provider 的共享 session，避免资源泄漏
+        # 关闭 Gateway Provider 的共享 session，避免资源泄漏
         from utils import generation_utils
-        if generation_utils.evolink_provider and hasattr(generation_utils.evolink_provider, 'close'):
+        if hasattr(generation_utils, "close_gateway_providers"):
+            await generation_utils.close_gateway_providers()
+        elif generation_utils.evolink_provider and hasattr(generation_utils.evolink_provider, 'close'):
             await generation_utils.evolink_provider.close()
 
     return results
@@ -286,13 +291,17 @@ async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9
         api_keys = api_keys or {}
 
         aipaibox_key = api_keys.get("aipaibox", "")
+        aipaibox_gemini_key = api_keys.get("aipaibox_gemini", "")
+        aipaibox_openai_key = api_keys.get("aipaibox_openai", "")
         evolink_key = api_keys.get("evolink", "")
         google_key = api_keys.get("google", "")
         openai_key = api_keys.get("openai", "")
 
-        if aipaibox_key:
-            generation_utils.init_evolink_provider(
-                aipaibox_key,
+        if any([aipaibox_key, aipaibox_gemini_key, aipaibox_openai_key]):
+            generation_utils.init_aipaibox_provider(
+                api_key=aipaibox_key,
+                gemini_api_key=aipaibox_gemini_key,
+                openai_api_key=aipaibox_openai_key,
                 base_url=get_config_val("aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"),
             )
         elif evolink_key:
@@ -558,8 +567,8 @@ def main():
                 help="评审优化迭代的最大轮次"
             )
 
-            default_text_model = get_config_val("defaults", "model_name", "PAPERBANANA_MODEL_NAME", "gemini-2.5-flash")
-            default_image_model = get_config_val("defaults", "image_model_name", "PAPERBANANA_IMAGE_MODEL_NAME", "gemini-3.1-flash-image-preview")
+            default_text_model = get_config_val("defaults", "model_name", "PAPERBANANA_MODEL_NAME", "gpt-5.5")
+            default_image_model = get_config_val("defaults", "image_model_name", "PAPERBANANA_IMAGE_MODEL_NAME", "gpt-image-2")
 
             model_name = _model_selectbox_with_custom(
                 "文本模型",
@@ -580,12 +589,20 @@ def main():
             st.caption("API 通道自动选择；发生超时、返回 Error 或初始化失败时会尝试下一个可用通道。")
 
             with st.expander("API Keys", expanded=False):
-                aipaibox_api_key = st.text_input(
-                    "AIPAIBOX API Key",
+                aipaibox_legacy_api_key = get_config_val("aipaibox", "api_key", "AIPAIBOX_API_KEY", "")
+                aipaibox_gemini_api_key = st.text_input(
+                    "AIPAIBOX Gemini API Key",
                     type="password",
-                    key="tab1_aipaibox_api_key",
-                    value=get_config_val("aipaibox", "api_key", "AIPAIBOX_API_KEY", ""),
-                    help="用于 https://api.aipaibox.com 国内网关"
+                    key="tab1_aipaibox_gemini_api_key",
+                    value=get_config_val("aipaibox", "gemini_api_key", "AIPAIBOX_GEMINI_API_KEY", aipaibox_legacy_api_key),
+                    help="用于 https://api.aipaibox.com 调用 Gemini 系列模型"
+                )
+                aipaibox_openai_api_key = st.text_input(
+                    "AIPAIBOX OpenAI API Key",
+                    type="password",
+                    key="tab1_aipaibox_openai_api_key",
+                    value=get_config_val("aipaibox", "openai_api_key", "AIPAIBOX_OPENAI_API_KEY", aipaibox_legacy_api_key),
+                    help="用于 https://api.aipaibox.com 调用 GPT/OpenAI 系列模型和 gpt-image-2"
                 )
                 google_api_key = st.text_input(
                     "Google API Key",
@@ -611,7 +628,9 @@ def main():
 
             provider = "auto"
             api_keys = {
-                "aipaibox": aipaibox_api_key,
+                "aipaibox": aipaibox_legacy_api_key,
+                "aipaibox_gemini": aipaibox_gemini_api_key,
+                "aipaibox_openai": aipaibox_openai_api_key,
                 "google": google_api_key,
                 "openai": openai_api_key,
                 "evolink": evolink_api_key,

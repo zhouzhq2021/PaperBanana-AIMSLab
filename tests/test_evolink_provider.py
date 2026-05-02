@@ -379,6 +379,22 @@ class TestRequestBuilding:
 # ==================== generation_utils 集成测试 ====================
 
 class TestGenerationUtilsIntegration:
+    def test_gateway_openai_image_size_uses_dimensions(self):
+        """gpt-image-* through gateway must use WIDTHxHEIGHT, not ratio strings."""
+        from utils import generation_utils
+
+        assert generation_utils._gateway_openai_size_from_aspect_ratio("21:9") == "1824x784"
+        assert generation_utils._gateway_openai_size_from_aspect_ratio("16:9") == "1824x1024"
+        assert generation_utils._gateway_openai_size_from_aspect_ratio("1024x1024") == "1024x1024"
+
+    def test_gateway_openai_image_quality_uses_openai_values(self):
+        """gpt-image-* through gateway should not receive Gemini-style 2K quality."""
+        from utils import generation_utils
+
+        assert generation_utils._gateway_quality_for_model("gpt-image-2", {"quality": "2K"}) == "high"
+        assert generation_utils._gateway_quality_for_model("gpt-image-2", {"openai_quality": "medium"}) == "medium"
+        assert generation_utils._gateway_quality_for_model("gemini-3.1-flash-image-preview", {"quality": "2K"}) == "2K"
+
     @pytest.mark.asyncio
     async def test_call_evolink_text_routes_correctly(self):
         """测试 generation_utils 中的 evolink 文本调用"""

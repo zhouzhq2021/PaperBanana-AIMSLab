@@ -46,7 +46,7 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 | `PAPERBANANA_AUTO_PROVIDER_ATTEMPTS` | `2` | 每个模型通道组合的尝试次数 |
 | `PAPERBANANA_AUTO_PROVIDER_RETRY_DELAY` | `2` | 单个组合内重试间隔（秒） |
 | `PAPERBANANA_AUTO_PROVIDER_COOLDOWN_SECONDS` | `300` | 失败组合的暂停时间（秒） |
-| `PAPERBANANA_TEXT_MODEL_FALLBACKS` | `gpt-5.5,gpt-5.4,gemini-2.5-flash,gemini-2.5-pro` | 文本模型备用顺序 |
+| `PAPERBANANA_TEXT_MODEL_FALLBACKS` | `gpt-5.5,gpt-5.4,gemini-2.5-flash` | 文本模型备用顺序 |
 | `PAPERBANANA_DEBUG` | 空 | 设置为 `1` 时输出详细 API 请求/重试日志 |
 
 ### 支持 OpenAI `gpt-image-2`
@@ -132,7 +132,7 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 
 ### 第一步：获取 API Key
 
-**推荐 AIPAIBOX（国内直连）**：在 `configs/model_config.yaml` 中填写 `aipaibox.api_key`，默认地址为 `https://api.aipaibox.com`。
+**推荐 AIPAIBOX（国内直连）**：在 `configs/model_config.yaml` 中填写 `aipaibox.gemini_api_key` 和 `aipaibox.openai_api_key`，默认地址为 `https://api.aipaibox.com`。如果你的网关账号仍然是一把通用 key，也可以继续填写兼容字段 `aipaibox.api_key`。
 
 也可以用 Google Gemini：前往 https://aistudio.google.com/apikey 获取，并填写 `api_keys.google_api_key`。
 
