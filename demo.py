@@ -144,7 +144,6 @@ def create_sample_inputs(method_content, caption, diagram_type="Pipeline", aspec
 TEXT_MODEL_OPTIONS = [
     "gpt-5.5",
     "gpt-5.4",
-    "gpt-4.1",
     "gemini-2.5-flash",
     "gemini-2.5-pro",
     "自定义...",

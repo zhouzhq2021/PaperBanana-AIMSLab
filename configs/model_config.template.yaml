@@ -17,7 +17,7 @@
 # Default Models
 defaults:
   # Text model for Retriever/Planner/Stylist/Critic and plot-code generation.
-  # Examples: "gemini-2.5-flash", "gpt-4.1", "gpt-4o"
+  # Examples: "gemini-2.5-flash", "gpt-5.5", "gpt-5.4"
   model_name: ""
   # Image model for diagram generation/polishing.
   # Examples: "gemini-3.1-flash-image-preview", "gpt-image-2"

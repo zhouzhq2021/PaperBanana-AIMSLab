@@ -20,6 +20,8 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 
 **[⭐ Star PaperBanana-AIMSLab](https://github.com/zhouzhq2021/PaperBanana-AIMSLab)**
 
+[![Star History Chart](https://api.star-history.com/svg?repos=zhouzhq2021/PaperBanana-AIMSLab&type=Date)](https://www.star-history.com/#zhouzhq2021/PaperBanana-AIMSLab&Date)
+
 ---
 
 ## 最新更新
@@ -33,7 +35,19 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 - 侧边栏不再要求手动选择 Provider，只需要选择文本模型和图像模型。
 - 系统会根据可用 API Key 自动选择通道。
 - 遇到超时、异常、返回 `Error` 或初始化失败时，会自动尝试下一条可用通道。
-- 文本模型不再局限于 Gemini 系列，可使用 `gpt-5.5`、`gpt-5.4`、`gpt-4.1` 等 OpenAI 系列模型。
+- 自动 fallback 现在按 **模型@通道** 粒度工作：例如 `gemini-2.5-flash@aipaibox` 失败后，不会阻塞 `gpt-5.5@aipaibox` 或 `gpt-5.4@aipaibox`。
+- 每个模型通道组合会先完成短重试，再临时暂停该组合，避免“一次失败就熔断”，也避免国内不稳定环境下反复卡住。
+- 文本模型不再局限于 Gemini 系列，可使用 `gpt-5.5`、`gpt-5.4` 等 OpenAI 系列模型。
+
+可通过环境变量调整自动切换策略：
+
+| 环境变量 | 默认值 | 说明 |
+|---------|--------|------|
+| `PAPERBANANA_AUTO_PROVIDER_ATTEMPTS` | `2` | 每个模型通道组合的尝试次数 |
+| `PAPERBANANA_AUTO_PROVIDER_RETRY_DELAY` | `2` | 单个组合内重试间隔（秒） |
+| `PAPERBANANA_AUTO_PROVIDER_COOLDOWN_SECONDS` | `300` | 失败组合的暂停时间（秒） |
+| `PAPERBANANA_TEXT_MODEL_FALLBACKS` | `gpt-5.5,gpt-5.4,gemini-2.5-flash,gemini-2.5-pro` | 文本模型备用顺序 |
+| `PAPERBANANA_DEBUG` | 空 | 设置为 `1` 时输出详细 API 请求/重试日志 |
 
 ### 支持 OpenAI `gpt-image-2`
 

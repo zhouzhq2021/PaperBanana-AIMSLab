@@ -20,6 +20,7 @@ import json
 import asyncio
 import base64
 import re
+import time
 from io import BytesIO
 from functools import partial
 from ast import literal_eval
@@ -60,6 +61,30 @@ def get_first_config_val(*lookups, default=""):
 GATEWAY_PROVIDERS = {"aipaibox", "evolink", "gateway"}
 AUTO_PROVIDER = "auto"
 OPENAI_IMAGE_QUALITIES = {"standard", "hd", "low", "medium", "high", "auto"}
+DEBUG_LOGS = os.getenv("PAPERBANANA_DEBUG", "").lower() in {"1", "true", "yes", "on"}
+AUTO_PROVIDER_ATTEMPTS = int(os.getenv("PAPERBANANA_AUTO_PROVIDER_ATTEMPTS", "2"))
+AUTO_PROVIDER_RETRY_DELAY = float(os.getenv("PAPERBANANA_AUTO_PROVIDER_RETRY_DELAY", "2"))
+AUTO_PROVIDER_COOLDOWN_SECONDS = int(os.getenv("PAPERBANANA_AUTO_PROVIDER_COOLDOWN_SECONDS", "300"))
+DEFAULT_TEXT_MODEL_FALLBACKS = [
+    "gpt-5.5",
+    "gpt-5.4",
+    "gemini-2.5-flash",
+    "gemini-2.5-pro",
+]
+TEXT_MODEL_FALLBACKS = [
+    item.strip()
+    for item in os.getenv(
+        "PAPERBANANA_TEXT_MODEL_FALLBACKS",
+        ",".join(DEFAULT_TEXT_MODEL_FALLBACKS),
+    ).split(",")
+    if item.strip()
+]
+_provider_unhealthy_until: Dict[tuple[str, str, str], float] = {}
+
+
+def _debug_log(message: str):
+    if DEBUG_LOGS:
+        print(message)
 
 
 def _normalize_provider(provider: str = "") -> str:
@@ -112,6 +137,25 @@ def _is_provider_available(provider: str, kind: str) -> bool:
     return False
 
 
+def _is_provider_healthy(provider: str, kind: str, model_name: str = "") -> bool:
+    unhealthy_until = _provider_unhealthy_until.get(
+        (_normalize_provider(provider), kind, model_name), 0
+    )
+    return time.monotonic() >= unhealthy_until
+
+
+def _mark_provider_unhealthy(provider: str, kind: str, model_name: str = "", reason: str = ""):
+    provider_name = _normalize_provider(provider)
+    _provider_unhealthy_until[(provider_name, kind, model_name)] = (
+        time.monotonic() + AUTO_PROVIDER_COOLDOWN_SECONDS
+    )
+    reason_msg = f": {reason}" if reason else ""
+    print(
+        f"[自动通道] 暂停 {kind} 组合 {model_name}@{provider_name} "
+        f"{AUTO_PROVIDER_COOLDOWN_SECONDS}s{reason_msg}"
+    )
+
+
 def _dedupe(seq: List[str]) -> List[str]:
     seen = set()
     result = []
@@ -136,6 +180,10 @@ def _image_provider_candidates(model_name: str) -> List[str]:
     if is_gemini_model(model_name):
         return _dedupe(["aipaibox", "gemini"])
     return _dedupe(["aipaibox"])
+
+
+def _text_model_candidates(model_name: str) -> List[str]:
+    return _dedupe([model_name, *TEXT_MODEL_FALLBACKS])
 
 
 def _extract_text_config(config) -> Dict[str, Any]:
@@ -325,13 +373,13 @@ def init_openai_client(api_key: str, base_url: str = ""):
         print("警告：未安装 openai，OpenAI Client 不可用。请运行 pip install openai")
 
 
-# ==================== Evolink 调用函数 ====================
+# ==================== API Gateway 调用函数 ====================
 
 async def call_evolink_text_with_retry_async(
     model_name, contents, config, max_attempts=5, retry_delay=5, error_context=""
 ):
     """
-    通过 Evolink Provider 进行文本生成。
+    通过 OpenAI-compatible API Gateway Provider 进行文本生成。
 
     Args:
         model_name: 模型名称（如 "gemini-2.5-flash"）
@@ -341,26 +389,26 @@ async def call_evolink_text_with_retry_async(
         retry_delay: 重试间隔
         error_context: 错误上下文
     """
-    print(f"[DEBUG] call_evolink_text: model={model_name}, provider={'已初始化' if evolink_provider else '未初始化'}")
+    _debug_log(f"[DEBUG] call_api_gateway_text: model={model_name}, provider={'已初始化' if evolink_provider else '未初始化'}")
     if evolink_provider is None:
-        raise RuntimeError("Evolink Provider 未初始化，请检查 EVOLINK_API_KEY 配置。")
+        raise RuntimeError("API Gateway Provider 未初始化，请检查 AIPAIBOX_API_KEY/EVOLINK_API_KEY 配置。")
 
     # 从 config 中提取参数（兼容 types.GenerateContentConfig 和 dict）
     if hasattr(config, 'system_instruction'):
         system_prompt = config.system_instruction or ""
         temperature = config.temperature
         max_output_tokens = config.max_output_tokens
-        print(f"[DEBUG] call_evolink_text: 从 GenerateContentConfig 提取参数")
+        _debug_log(f"[DEBUG] call_api_gateway_text: 从 GenerateContentConfig 提取参数")
     elif isinstance(config, dict):
         system_prompt = config.get("system_prompt", "")
         temperature = config.get("temperature", 1.0)
         max_output_tokens = config.get("max_output_tokens", 50000)
-        print(f"[DEBUG] call_evolink_text: 从 dict 提取参数")
+        _debug_log(f"[DEBUG] call_api_gateway_text: 从 dict 提取参数")
     else:
         system_prompt = ""
         temperature = 1.0
         max_output_tokens = 50000
-        print(f"[DEBUG] call_evolink_text: 使用默认参数, config type={type(config)}")
+        _debug_log(f"[DEBUG] call_api_gateway_text: 使用默认参数, config type={type(config)}")
 
     return await evolink_provider.generate_text(
         model_name=model_name,
@@ -376,16 +424,16 @@ async def call_evolink_text_with_retry_async(
 
 async def upload_image_to_evolink(image_b64: str, media_type: str = "image/jpeg") -> str:
     """
-    将 base64 图片上传到 Evolink 文件服务，返回可访问的 URL。
+    将 base64 图片上传到 API Gateway 文件服务，返回可访问的 URL。
 
     用于 image-to-image 场景（如 Polish Agent），需要先把本地 base64 图片
     上传为 URL，才能传给图像生成 API 的 image_urls 参数。
     """
     if evolink_provider is None:
-        raise RuntimeError("Evolink Provider 未初始化，请检查 EVOLINK_API_KEY 配置。")
+        raise RuntimeError("API Gateway Provider 未初始化，请检查 AIPAIBOX_API_KEY/EVOLINK_API_KEY 配置。")
     url = await evolink_provider.upload_image_base64(image_b64, media_type)
     if not url:
-        raise RuntimeError("图片上传到 Evolink 文件服务失败")
+        raise RuntimeError("图片上传到 API Gateway 文件服务失败")
     return url
 
 
@@ -393,7 +441,7 @@ async def call_evolink_image_with_retry_async(
     model_name, prompt, config, max_attempts=5, retry_delay=30, error_context=""
 ):
     """
-    通过 Evolink Provider 进行图像生成。
+    通过 OpenAI-compatible API Gateway Provider 进行图像生成。
 
     Args:
         model_name: 图像模型名称（如 "nano-banana-2-lite"，通过 /v1/images/generations）
@@ -403,9 +451,9 @@ async def call_evolink_image_with_retry_async(
         retry_delay: 重试间隔
         error_context: 错误上下文
     """
-    print(f"[DEBUG] call_evolink_image: model={model_name}, config={config}, provider={'已初始化' if evolink_provider else '未初始化'}")
+    _debug_log(f"[DEBUG] call_api_gateway_image: model={model_name}, config={config}, provider={'已初始化' if evolink_provider else '未初始化'}")
     if evolink_provider is None:
-        raise RuntimeError("Evolink Provider 未初始化，请检查 EVOLINK_API_KEY 配置。")
+        raise RuntimeError("API Gateway Provider 未初始化，请检查 AIPAIBOX_API_KEY/EVOLINK_API_KEY 配置。")
 
     aspect_ratio = config.get("aspect_ratio", "16:9")
     quality = config.get("quality", "2K")
@@ -470,7 +518,7 @@ async def call_gemini_with_retry_async(
             if "nanoviz" in model_name or "image" in model_name:
                 raw_response_list = []
                 if not response.candidates or not response.candidates[0].content.parts:
-                    print(f"[Warning]: Failed to generate image, retrying in {retry_delay} seconds...")
+                    _debug_log(f"[Gemini] 图像响应为空，{retry_delay}s 后重试")
                     await asyncio.sleep(retry_delay)
                     continue
                 for part in response.candidates[0].content.parts:
@@ -493,13 +541,13 @@ async def call_gemini_with_retry_async(
         except Exception as e:
             context_msg = f" for {error_context}" if error_context else ""
             current_delay = min(retry_delay * (2 ** attempt), 30)
-            print(
-                f"Attempt {attempt + 1} for model {model_name} failed{context_msg}: {e}. Retrying in {current_delay} seconds..."
+            _debug_log(
+                f"[Gemini] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {e}"
             )
             if attempt < max_attempts - 1:
                 await asyncio.sleep(current_delay)
             else:
-                print(f"Error: All {max_attempts} attempts failed{context_msg}")
+                print(f"[Gemini] {model_name} 重试 {max_attempts} 次后失败{context_msg}: {e}")
                 result_list = ["Error"] * target_candidate_count
 
     if len(result_list) < target_candidate_count:
@@ -623,12 +671,12 @@ async def call_claude_with_retry_async(
         except Exception as e:
             error_str = str(e).lower()
             context_msg = f" for {error_context}" if error_context else ""
-            print(f"Validation attempt {attempt + 1} failed{context_msg}: {error_str}. Retrying in {retry_delay} seconds...")
+            _debug_log(f"[Claude] Attempt {attempt + 1}/{max_attempts} failed{context_msg}: {error_str}")
             if attempt < max_attempts - 1:
                 await asyncio.sleep(retry_delay)
 
     if not is_input_valid:
-        print(f"Error: All {max_attempts} attempts failed to validate the input. Returning errors.")
+        print(f"[Claude] {model_name} 重试 {max_attempts} 次后失败")
         return ["Error"] * candidate_num
 
     remaining_candidates = candidate_num - 1
@@ -687,12 +735,12 @@ async def call_openai_with_retry_async(
         except Exception as e:
             error_str = str(e).lower()
             context_msg = f" for {error_context}" if error_context else ""
-            print(f"Validation attempt {attempt + 1} failed{context_msg}: {error_str}. Retrying in {retry_delay} seconds...")
+            _debug_log(f"[OpenAI] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {error_str}")
             if attempt < max_attempts - 1:
                 await asyncio.sleep(retry_delay)
 
     if not is_input_valid:
-        print(f"Error: All {max_attempts} attempts failed to validate the input. Returning errors.")
+        print(f"[OpenAI] {model_name} 重试 {max_attempts} 次后失败")
         return ["Error"] * candidate_num
 
     remaining_candidates = candidate_num - 1
@@ -749,17 +797,17 @@ async def call_openai_image_generation_with_retry_async(
             if response.data and response.data[0].b64_json:
                 return [response.data[0].b64_json]
             else:
-                print(f"[Warning]: Failed to generate image via OpenAI, no data returned.")
+                _debug_log("[OpenAI 图像] 响应为空")
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(retry_delay)
                 continue
         except Exception as e:
             context_msg = f" for {error_context}" if error_context else ""
-            print(f"Attempt {attempt + 1} for OpenAI image generation model {model_name} failed{context_msg}: {e}. Retrying in {retry_delay} seconds...")
+            _debug_log(f"[OpenAI 图像] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {e}")
             if attempt < max_attempts - 1:
                 await asyncio.sleep(retry_delay)
             else:
-                print(f"Error: All {max_attempts} attempts failed{context_msg}")
+                print(f"[OpenAI 图像] {model_name} 重试 {max_attempts} 次后失败{context_msg}: {e}")
                 return ["Error"]
 
     return ["Error"]
@@ -803,20 +851,17 @@ async def call_openai_image_edit_with_retry_async(
             response = await openai_client.images.edit(**edit_params)
             if response.data and response.data[0].b64_json:
                 return [response.data[0].b64_json]
-            print("[Warning]: Failed to edit image via OpenAI, no data returned.")
+            _debug_log("[OpenAI 图像编辑] 响应为空")
             if attempt < max_attempts - 1:
                 await asyncio.sleep(retry_delay)
         except Exception as e:
             context_msg = f" for {error_context}" if error_context else ""
             current_delay = min(retry_delay * (2 ** attempt), 60)
-            print(
-                f"Attempt {attempt + 1} for OpenAI image edit model {model_name} "
-                f"failed{context_msg}: {e}. Retrying in {current_delay} seconds..."
-            )
+            _debug_log(f"[OpenAI 图像编辑] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {e}")
             if attempt < max_attempts - 1:
                 await asyncio.sleep(current_delay)
             else:
-                print(f"Error: All {max_attempts} attempts failed{context_msg}")
+                print(f"[OpenAI 图像编辑] {model_name} 重试 {max_attempts} 次后失败{context_msg}: {e}")
                 return ["Error"]
 
     return ["Error"]
@@ -838,33 +883,42 @@ async def call_text_model_with_retry_async(
     cfg = _extract_text_config(config)
 
     if _is_auto_provider(provider_name):
-        candidates = _text_provider_candidates(model_name)
+        model_candidates = _text_model_candidates(model_name)
         attempted = []
-        for candidate in candidates:
-            if not _is_provider_available(candidate, kind="text"):
-                print(f"[自动通道] 跳过文本通道 {candidate}: 未配置或未初始化")
-                continue
-            attempted.append(candidate)
-            try:
-                print(f"[自动通道] 文本模型 {model_name} 尝试使用 {candidate}")
-                result = await call_text_model_with_retry_async(
-                    provider=candidate,
-                    model_name=model_name,
-                    contents=contents,
-                    config=config,
-                    max_attempts=max_attempts,
-                    retry_delay=retry_delay,
-                    error_context=error_context,
-                )
-                if not _is_bad_response(result):
-                    print(f"[自动通道] 文本模型 {model_name} 使用 {candidate} 成功")
-                    return result
-                print(f"[自动通道] 文本通道 {candidate} 返回错误，尝试下一通道")
-            except Exception as e:
-                print(f"[自动通道] 文本通道 {candidate} 异常: {e}，尝试下一通道")
+        for current_model in model_candidates:
+            if current_model != model_name:
+                print(f"[自动通道] 文本模型 {model_name} 失败后，尝试备用模型 {current_model}")
+            candidates = _text_provider_candidates(current_model)
+            for candidate in candidates:
+                if not _is_provider_available(candidate, kind="text"):
+                    _debug_log(f"[自动通道] 跳过文本通道 {candidate}: 未配置或未初始化")
+                    continue
+                if not _is_provider_healthy(candidate, kind="text", model_name=current_model):
+                    _debug_log(f"[自动通道] 跳过文本组合 {current_model}@{candidate}: 近期失败，冷却中")
+                    continue
+                attempted.append(f"{current_model}@{candidate}")
+                try:
+                    _debug_log(f"[自动通道] 文本模型 {current_model} 尝试使用 {candidate}")
+                    result = await call_text_model_with_retry_async(
+                        provider=candidate,
+                        model_name=current_model,
+                        contents=contents,
+                        config=config,
+                        max_attempts=AUTO_PROVIDER_ATTEMPTS,
+                        retry_delay=AUTO_PROVIDER_RETRY_DELAY,
+                        error_context=error_context,
+                    )
+                    if not _is_bad_response(result):
+                        print(f"[自动通道] 文本模型 {current_model} 使用 {candidate} 成功")
+                        return result
+                    print(f"[自动通道] 文本组合 {current_model}@{candidate} 重试后仍失败")
+                    _mark_provider_unhealthy(candidate, "text", current_model, "返回 Error")
+                except Exception as e:
+                    print(f"[自动通道] 文本组合 {current_model}@{candidate} 异常，尝试下一项")
+                    _mark_provider_unhealthy(candidate, "text", current_model, str(e)[:120])
 
         candidate_num = cfg.get("candidate_num", 1) or 1
-        print(f"[自动通道] 文本模型 {model_name} 所有可用通道均失败，已尝试: {attempted}")
+        print(f"[自动通道] 文本模型和通道均失败，已尝试: {attempted}")
         return ["Error"] * candidate_num
 
     if is_gateway_provider(provider_name):
@@ -947,11 +1001,14 @@ async def call_image_model_with_retry_async(
         attempted = []
         for candidate in candidates:
             if not _is_provider_available(candidate, kind="image"):
-                print(f"[自动通道] 跳过图像通道 {candidate}: 未配置或未初始化")
+                _debug_log(f"[自动通道] 跳过图像通道 {candidate}: 未配置或未初始化")
+                continue
+            if not _is_provider_healthy(candidate, kind="image", model_name=model_name):
+                _debug_log(f"[自动通道] 跳过图像组合 {model_name}@{candidate}: 近期失败，冷却中")
                 continue
             attempted.append(candidate)
             try:
-                print(f"[自动通道] 图像模型 {model_name} 尝试使用 {candidate}")
+                _debug_log(f"[自动通道] 图像模型 {model_name} 尝试使用 {candidate}")
                 result = await call_image_model_with_retry_async(
                     provider=candidate,
                     model_name=model_name,
@@ -960,16 +1017,18 @@ async def call_image_model_with_retry_async(
                     contents=contents,
                     system_prompt=system_prompt,
                     temperature=temperature,
-                    max_attempts=max_attempts,
-                    retry_delay=retry_delay,
+                    max_attempts=AUTO_PROVIDER_ATTEMPTS,
+                    retry_delay=AUTO_PROVIDER_RETRY_DELAY,
                     error_context=error_context,
                 )
                 if not _is_bad_response(result):
                     print(f"[自动通道] 图像模型 {model_name} 使用 {candidate} 成功")
                     return result
-                print(f"[自动通道] 图像通道 {candidate} 返回错误，尝试下一通道")
+                print(f"[自动通道] 图像组合 {model_name}@{candidate} 重试后仍失败")
+                _mark_provider_unhealthy(candidate, "image", model_name, "返回 Error")
             except Exception as e:
-                print(f"[自动通道] 图像通道 {candidate} 异常: {e}，尝试下一通道")
+                print(f"[自动通道] 图像组合 {model_name}@{candidate} 异常，尝试下一通道")
+                _mark_provider_unhealthy(candidate, "image", model_name, str(e)[:120])
 
         print(f"[自动通道] 图像模型 {model_name} 所有可用通道均失败，已尝试: {attempted}")
         return ["Error"]
