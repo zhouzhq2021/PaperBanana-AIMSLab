@@ -94,7 +94,8 @@ class VisualizerAgent(BaseAgent):
     async def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
         cfg = self.task_config
         task_name = cfg["task_name"]
-        print(f"[DEBUG] [VisualizerAgent] 开始处理, task={task_name}, provider={self.exp_config.provider}, model={self.model_name}, 图像生成={cfg['use_image_generation']}")
+        image_provider = getattr(self.exp_config, "image_provider", "") or self.exp_config.provider
+        print(f"[DEBUG] [VisualizerAgent] 开始处理, task={task_name}, provider={self.exp_config.provider}, image_provider={image_provider}, model={self.model_name}, 图像生成={cfg['use_image_generation']}")
 
         desc_keys_to_process = []
         for key in [
@@ -134,7 +135,7 @@ class VisualizerAgent(BaseAgent):
                 if "additional_info" in data and "rounded_ratio" in data["additional_info"]:
                     aspect_ratio = data["additional_info"]["rounded_ratio"]
                 response_list = await generation_utils.call_image_model_with_retry_async(
-                    provider=self.exp_config.provider,
+                    provider=image_provider,
                     model_name=self.model_name,
                     prompt=prompt_text,
                     contents=content_list,
@@ -142,7 +143,7 @@ class VisualizerAgent(BaseAgent):
                     temperature=self.exp_config.temperature,
                     config={
                         "aspect_ratio": aspect_ratio,
-                        "quality": "2K" if generation_utils.is_gateway_provider(self.exp_config.provider) else "high",
+                        "quality": "2K" if generation_utils.is_gateway_provider(image_provider) else "high",
                         "image_size": "1k",
                         "output_format": "png",
                     },

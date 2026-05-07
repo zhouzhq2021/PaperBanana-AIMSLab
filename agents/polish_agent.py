@@ -96,6 +96,7 @@ class PolishAgent(BaseAgent):
     async def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
         cfg = self.task_config
         task_name = cfg["task_name"]
+        image_provider = getattr(self.exp_config, "image_provider", "") or self.exp_config.provider
 
         gt_image_path_rel = data.get("path_to_gt_image")
         if not gt_image_path_rel:
@@ -147,7 +148,7 @@ class PolishAgent(BaseAgent):
 
         try:
             response_list = await generation_utils.call_image_model_with_retry_async(
-                provider=self.exp_config.provider,
+                provider=image_provider,
                 model_name=self.image_model_name,
                 prompt=user_prompt,
                 contents=content_list,
@@ -159,7 +160,7 @@ class PolishAgent(BaseAgent):
                 temperature=self.exp_config.temperature,
                 config={
                     "aspect_ratio": data.get("additional_info", {}).get("rounded_ratio", "16:9"),
-                    "quality": "2K" if generation_utils.is_gateway_provider(self.exp_config.provider) else "high",
+                    "quality": "2K" if generation_utils.is_gateway_provider(image_provider) else "high",
                     "image_size": "1k",
                     "output_format": "png",
                 },

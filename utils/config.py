@@ -37,6 +37,7 @@ class ExpConfig:
     model_name: str = ""
     image_model_name: str = ""
     provider: str = "auto"
+    image_provider: str = ""
     work_dir: Path = Path(__file__).parent.parent
 
     timestamp: str | None = None

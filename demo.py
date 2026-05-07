@@ -154,6 +154,24 @@ IMAGE_MODEL_OPTIONS = [
     "自定义...",
 ]
 
+IMAGE_PROVIDER_OPTIONS = [
+    "auto",
+    "aipaibox",
+    "evolink",
+    "gateway",
+    "gemini",
+    "openai",
+]
+
+IMAGE_PROVIDER_LABELS = {
+    "auto": "自动选择",
+    "aipaibox": "AIPAIBOX 网关",
+    "evolink": "Evolink 网关",
+    "gateway": "通用网关（AIPAIBOX 优先）",
+    "gemini": "Google Gemini 官方",
+    "openai": "OpenAI 官方",
+}
+
 
 def _select_index(options, value, default=0):
     return options.index(value) if value in options else default
@@ -185,12 +203,12 @@ def _model_selectbox_with_custom(label, options, default_value, key, help_text):
     ).strip()
 
 
-async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", retrieval_setting="auto", model_name="", image_model_name="", provider="auto", api_keys=None):
+async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", retrieval_setting="auto", model_name="", image_model_name="", provider="auto", image_provider="auto", api_keys=None):
     """使用 PaperVizProcessor 并行处理多个候选方案。"""
     api_keys = api_keys or {}
     print(f"\n{'='*60}")
     print(f"[DEBUG] process_parallel_candidates 开始")
-    print(f"[DEBUG]   provider={provider}, model={model_name}, image_model={image_model_name}")
+    print(f"[DEBUG]   provider={provider}, image_provider={image_provider}, model={model_name}, image_model={image_model_name}")
     print(f"[DEBUG]   exp_mode={exp_mode}, retrieval={retrieval_setting}, candidates={len(data_list)}")
     available_key_names = [name for name, key in api_keys.items() if key]
     print(f"[DEBUG]   可用 key: {available_key_names or '无'}")
@@ -213,7 +231,7 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
             openai_api_key=aipaibox_openai_key,
             base_url=get_config_val("aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"),
         )
-    elif evolink_key:
+    if evolink_key:
         generation_utils.init_evolink_provider(
             evolink_key,
             base_url=get_config_val("evolink", "base_url", "EVOLINK_BASE_URL", "https://api.evolink.ai"),
@@ -236,9 +254,10 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
         model_name=model_name,
         image_model_name=image_model_name,
         provider=provider,
+        image_provider=image_provider,
         work_dir=Path(__file__).parent,
     )
-    print(f"[DEBUG] ExpConfig 已创建: provider={exp_config.provider}, model={exp_config.model_name}, image_model={exp_config.image_model_name}")
+    print(f"[DEBUG] ExpConfig 已创建: provider={exp_config.provider}, image_provider={exp_config.image_provider}, model={exp_config.model_name}, image_model={exp_config.image_model_name}")
 
     # 初始化处理器及所有代理
     processor = PaperVizProcessor(
@@ -281,7 +300,7 @@ async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9
         aspect_ratio: 输出宽高比 (21:9, 16:9, 3:2)
         image_size: 输出分辨率 (2K 或 4K)
         api_keys: 各通道 API 密钥
-        provider: 固定为 "auto"，保留参数用于兼容
+        provider: 图片模型使用的 API 通道
 
     返回：
         元组 (编辑后的图像字节数据, 成功消息)
@@ -304,7 +323,7 @@ async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9
                 openai_api_key=aipaibox_openai_key,
                 base_url=get_config_val("aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"),
             )
-        elif evolink_key:
+        if evolink_key:
             generation_utils.init_evolink_provider(
                 evolink_key,
                 base_url=get_config_val("evolink", "base_url", "EVOLINK_BASE_URL", "https://api.evolink.ai"),
@@ -586,7 +605,16 @@ def main():
                 help_text="用于图像生成/精修。系统会自动选择可用通道。"
             )
 
-            st.caption("API 通道自动选择；发生超时、返回 Error 或初始化失败时会尝试下一个可用通道。")
+            image_provider = st.selectbox(
+                "图片模型通道",
+                IMAGE_PROVIDER_OPTIONS,
+                index=_select_index(IMAGE_PROVIDER_OPTIONS, "auto"),
+                key="tab1_image_provider",
+                help="只影响图片模型调用；文本模型仍使用自动通道。",
+                format_func=lambda x: f"{IMAGE_PROVIDER_LABELS[x]} ({x})",
+            )
+
+            st.caption("文本 API 通道仍自动选择；图片模型可按上方选项手动指定，选择 auto 时才会自动切换。")
 
             with st.expander("API Keys", expanded=False):
                 aipaibox_legacy_api_key = get_config_val("aipaibox", "api_key", "AIPAIBOX_API_KEY", "")
@@ -768,6 +796,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                             model_name=model_name,
                             image_model_name=image_model_name,
                             provider=provider,
+                            image_provider=image_provider,
                             api_keys=api_keys
                         ))
                         st.session_state["results"] = results
@@ -964,7 +993,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                                         aspect_ratio=refine_aspect_ratio,
                                         image_size=refine_resolution,
                                         api_keys=api_keys,
-                                        provider=provider,
+                                        provider=image_provider,
                                     )
                                 )
 

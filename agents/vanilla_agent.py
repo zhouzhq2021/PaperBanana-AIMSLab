@@ -98,6 +98,7 @@ class VanillaAgent(BaseAgent):
 
     async def process(self, data: Dict[str, Any]) -> Dict[str, Any]:
         cfg = self.task_config
+        image_provider = getattr(self.exp_config, "image_provider", "") or self.exp_config.provider
 
         raw_content = data["content"]
         content = json.dumps(raw_content) if isinstance(raw_content, (dict, list)) else raw_content
@@ -117,7 +118,7 @@ class VanillaAgent(BaseAgent):
         if cfg["use_image_generation"]:
             aspect_ratio = data.get("additional_info", {}).get("rounded_ratio", "1:1")
             response_list = await generation_utils.call_image_model_with_retry_async(
-                provider=self.exp_config.provider,
+                provider=image_provider,
                 model_name=self.model_name,
                 prompt=prompt_text[:30000],
                 contents=content_list,
@@ -125,7 +126,7 @@ class VanillaAgent(BaseAgent):
                 temperature=self.exp_config.temperature,
                 config={
                     "aspect_ratio": aspect_ratio,
-                    "quality": "2K" if generation_utils.is_gateway_provider(self.exp_config.provider) else "high",
+                    "quality": "2K" if generation_utils.is_gateway_provider(image_provider) else "high",
                     "image_size": "1k",
                     "output_format": "png",
                 },
