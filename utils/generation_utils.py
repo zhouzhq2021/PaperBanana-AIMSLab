@@ -1153,7 +1153,7 @@ async def call_text_model_with_retry_async(
             provider_name=provider_name,
         )
 
-    if provider_name == "openai" or is_openai_text_model(model_name):
+    if provider_name == "openai":
         return await call_openai_with_retry_async(
             model_name=model_name,
             contents=contents,
@@ -1284,7 +1284,7 @@ async def call_image_model_with_retry_async(
             provider_name=provider_name,
         )
 
-    if provider_name == "openai" or is_openai_image_model(model_name):
+    if provider_name == "openai":
         openai_quality = cfg.get("openai_quality") or cfg.get("quality", "high")
         if openai_quality not in OPENAI_IMAGE_QUALITIES:
             openai_quality = "high"

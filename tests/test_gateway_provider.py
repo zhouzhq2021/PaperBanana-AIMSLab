@@ -514,6 +514,43 @@ class TestGenerationUtilsIntegration:
         assert generation_utils._gateway_quality_for_model("gemini-3.1-flash-image-preview", {"quality": "2K"}) == "2K"
 
     @pytest.mark.asyncio
+    async def test_explicit_aipaibox_gpt_image_routes_to_gateway(self):
+        """gpt-image-* on AIPAIBOX must not use the official OpenAI client."""
+        from utils import generation_utils
+
+        mock_provider = MagicMock()
+        mock_provider.upload_image_base64 = AsyncMock(return_value="https://example.com/input.png")
+        mock_provider.generate_image = AsyncMock(return_value=["gateway-image"])
+
+        with patch.object(generation_utils, "_resolve_gateway_provider", return_value=mock_provider), \
+             patch.object(generation_utils, "call_openai_image_edit_with_retry_async", new_callable=AsyncMock) as mock_openai_edit, \
+             patch.object(generation_utils, "call_openai_image_generation_with_retry_async", new_callable=AsyncMock) as mock_openai_generate:
+            result = await generation_utils.call_image_model_with_retry_async(
+                provider="aipaibox",
+                model_name="gpt-image-2",
+                prompt="Edit this",
+                config={"aspect_ratio": "16:9", "quality": "2K", "openai_quality": "high"},
+                contents=[
+                    {"type": "text", "text": "Edit this"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": make_png_base64(),
+                        },
+                    },
+                ],
+                max_attempts=1,
+                retry_delay=0,
+            )
+
+        assert result == ["gateway-image"]
+        mock_provider.generate_image.assert_awaited_once()
+        mock_openai_edit.assert_not_awaited()
+        mock_openai_generate.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_call_gateway_text_routes_correctly(self):
         """测试 generation_utils 中的 gateway 文本调用"""
         from utils import generation_utils
