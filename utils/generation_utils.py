@@ -21,6 +21,7 @@ import asyncio
 import base64
 import re
 import time
+import uuid
 from io import BytesIO
 from functools import partial
 from ast import literal_eval
@@ -189,6 +190,10 @@ def _mark_provider_unhealthy(provider: str, kind: str, model_name: str = "", rea
         f"[自动通道] 暂停 {kind} 组合 {model_name}@{provider_name} "
         f"{AUTO_PROVIDER_COOLDOWN_SECONDS}s{reason_msg}"
     )
+
+
+def _context_suffix(error_context: str = "") -> str:
+    return f" [{error_context}]" if error_context else ""
 
 
 def _dedupe(seq: List[str]) -> List[str]:
@@ -1283,22 +1288,25 @@ async def call_image_model_with_retry_async(
 
     if _is_auto_provider(provider_name):
         model_candidates = _image_model_candidates(model_name)
-        print(f"[自动通道] 图像请求初始模型: {model_name}, 候选顺序: {model_candidates}")
+        if not error_context:
+            error_context = f"image-{uuid.uuid4().hex[:8]}"
+        context_suffix = _context_suffix(error_context)
+        print(f"[自动通道]{context_suffix} 图像请求初始模型: {model_name}, 候选顺序: {model_candidates}")
         attempted = []
         for current_model in model_candidates:
             if current_model != model_name:
-                print(f"[自动通道] 图像模型 {model_name} 失败后，尝试备用模型 {current_model}")
+                print(f"[自动通道]{context_suffix} 图像模型 {model_name} 失败后，尝试备用模型 {current_model}")
             candidates = _image_provider_candidates(current_model)
             for candidate in candidates:
                 if not _is_provider_available(candidate, kind="image", model_name=current_model):
-                    _debug_log(f"[自动通道] 跳过图像通道 {candidate}: 未配置或未初始化")
+                    _debug_log(f"[自动通道]{context_suffix} 跳过图像通道 {candidate}: 未配置或未初始化")
                     continue
                 if not _is_provider_healthy(candidate, kind="image", model_name=current_model):
-                    _debug_log(f"[自动通道] 跳过图像组合 {current_model}@{candidate}: 近期失败，冷却中")
+                    _debug_log(f"[自动通道]{context_suffix} 跳过图像组合 {current_model}@{candidate}: 近期失败，冷却中")
                     continue
                 attempted.append(f"{current_model}@{candidate}")
                 try:
-                    _debug_log(f"[自动通道] 图像模型 {current_model} 尝试使用 {candidate}")
+                    _debug_log(f"[自动通道]{context_suffix} 图像模型 {current_model} 尝试使用 {candidate}")
                     result = await call_image_model_with_retry_async(
                         provider=candidate,
                         model_name=current_model,
@@ -1312,15 +1320,15 @@ async def call_image_model_with_retry_async(
                         error_context=error_context,
                     )
                     if not _is_bad_response(result):
-                        print(f"[自动通道] 图像模型 {current_model} 使用 {candidate} 成功")
+                        print(f"[自动通道]{context_suffix} 图像模型 {current_model} 使用 {candidate} 成功")
                         return result
-                    print(f"[自动通道] 图像组合 {current_model}@{candidate} 重试后仍失败")
+                    print(f"[自动通道]{context_suffix} 图像组合 {current_model}@{candidate} 重试后仍失败")
                     _mark_provider_unhealthy(candidate, "image", current_model, "返回 Error")
                 except Exception as e:
-                    print(f"[自动通道] 图像组合 {current_model}@{candidate} 异常，尝试下一通道")
+                    print(f"[自动通道]{context_suffix} 图像组合 {current_model}@{candidate} 异常，尝试下一通道")
                     _mark_provider_unhealthy(candidate, "image", current_model, str(e)[:120])
 
-        print(f"[自动通道] 图像模型和通道均失败，已尝试: {attempted}")
+        print(f"[自动通道]{context_suffix} 图像模型和通道均失败，已尝试: {attempted}")
         return ["Error"]
 
     if is_gateway_provider(provider_name):

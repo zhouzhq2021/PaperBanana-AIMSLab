@@ -285,7 +285,16 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
 
     return results
 
-async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9", image_size="2K", api_keys=None, provider="auto", image_model="gpt-image-2"):
+async def refine_image_with_nanoviz(
+    image_bytes,
+    edit_prompt,
+    aspect_ratio="21:9",
+    image_size="2K",
+    api_keys=None,
+    provider="auto",
+    image_model="gpt-image-2",
+    error_context="",
+):
     """
     使用自动 API 通道精修图像，支持 AIPAIBOX/Evolink、Gemini 和 OpenAI。
 
@@ -297,6 +306,7 @@ async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9
         api_keys: 各通道 API 密钥
         provider: 优先 API 提供商
         image_model: 图像模型名称
+        error_context: 日志上下文
 
     返回：
         元组 (编辑后的图像字节数据, 成功消息)
@@ -356,6 +366,7 @@ async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9
                 },
                 max_attempts=3,
                 retry_delay=10,
+                error_context=error_context,
             )
 
             if result and result[0] and result[0] != "Error":
@@ -452,7 +463,7 @@ def display_candidate_result(result, candidate_id, exp_mode):
     if final_image_key and final_image_key in result:
         img = base64_to_image(result[final_image_key])
         if img:
-            st.image(img, use_container_width=True, caption=f"候选方案 {candidate_id}（最终版）")
+            st.image(img, width="stretch", caption=f"候选方案 {candidate_id}（最终版）")
 
             # 添加下载按钮
             buffered = BytesIO()
@@ -463,7 +474,7 @@ def display_candidate_result(result, candidate_id, exp_mode):
                 file_name=f"candidate_{candidate_id}.png",
                 mime="image/png",
                 key=f"download_candidate_{candidate_id}",
-                use_container_width=True
+                width="stretch"
             )
         else:
             st.error(f"候选方案 {candidate_id} 的图像解码失败")
@@ -483,7 +494,7 @@ def display_candidate_result(result, candidate_id, exp_mode):
                 # 展示该阶段的图像
                 stage_img = base64_to_image(result.get(stage['image_key']))
                 if stage_img:
-                    st.image(stage_img, use_container_width=True)
+                    st.image(stage_img, width="stretch")
 
                 # 展示描述
                 if stage['desc_key'] in result:
@@ -778,7 +789,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
             )
 
         # 处理按钮
-        if st.button("🚀 生成候选方案", type="primary", use_container_width=True):
+        if st.button("🚀 生成候选方案", type="primary", width="stretch"):
             if not method_content or not caption:
                 st.error("请同时提供方法内容和图注！")
             else:
@@ -868,7 +879,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                             data=json_data,
                             file_name=json_file_path.name,
                             mime="application/json",
-                            use_container_width=True
+                            width="stretch"
                         )
 
             # 以网格形式展示结果（3 列）
@@ -929,7 +940,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                     data=zip_buffer.getvalue(),
                     file_name=f"papervizagent_candidates_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                     mime="application/zip",
-                    use_container_width=True
+                    width="stretch"
                 )
                 st.success("ZIP 压缩包已准备好，可以下载！")
             except Exception as e:
@@ -1000,7 +1011,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
 
             with col1:
                 st.markdown("### 原始图像")
-                st.image(uploaded_image, use_container_width=True)
+                st.image(uploaded_image, width="stretch")
 
             with col2:
                 st.markdown("### 编辑指令")
@@ -1012,7 +1023,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                     key="edit_prompt"
                 )
 
-                if st.button("✨ 精修图像", type="primary", use_container_width=True):
+                if st.button("✨ 精修图像", type="primary", width="stretch"):
                     if not edit_prompt:
                         st.error("请提供编辑指令！")
                     else:
@@ -1039,6 +1050,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                                         api_keys=api_keys,
                                         provider=refine_provider,
                                         image_model=current_image_model,
+                                        error_context=f"refine-{current_image_model}-{datetime.now().strftime('%H%M%S')}",
                                     )
                                 )
 
@@ -1063,12 +1075,12 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
 
                 with col1:
                     st.markdown("### 精修前")
-                    st.image(uploaded_image, use_container_width=True)
+                    st.image(uploaded_image, width="stretch")
 
                 with col2:
                     st.markdown(f"### 精修后（{refine_resolution}）")
                     refined_image = Image.open(BytesIO(st.session_state["refined_image"]))
-                    st.image(refined_image, use_container_width=True)
+                    st.image(refined_image, width="stretch")
 
                     # 下载按钮
                     st.download_button(
@@ -1076,7 +1088,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                         data=st.session_state["refined_image"],
                         file_name=f"refined_{refine_resolution}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.png",
                         mime="image/png",
-                        use_container_width=True
+                        width="stretch"
                     )
 
 if __name__ == "__main__":

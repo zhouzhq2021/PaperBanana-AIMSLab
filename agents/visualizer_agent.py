@@ -148,6 +148,7 @@ class VisualizerAgent(BaseAgent):
                     },
                     max_attempts=5,
                     retry_delay=30,
+                    error_context=f"visualizer-{data.get('candidate_id', 'na')}-{desc_key}",
                 )
             else:
                 response_list = await generation_utils.call_text_model_with_retry_async(
