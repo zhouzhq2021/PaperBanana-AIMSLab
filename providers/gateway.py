@@ -193,6 +193,8 @@ class GatewayProvider(BaseProvider):
     def _build_gemini_image_payload(
         self,
         prompt: str,
+        aspect_ratio: str = "16:9",
+        image_size: str = "2K",
         image_inputs: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """构建 Gemini generateContent 图像请求体。"""
@@ -215,6 +217,10 @@ class GatewayProvider(BaseProvider):
             ],
             "generationConfig": {
                 "responseModalities": ["IMAGE"],
+                "imageConfig": {
+                    "aspectRatio": aspect_ratio,
+                    "imageSize": image_size,
+                },
             },
             "tool_config": {
                 "function_calling_config": {
@@ -560,6 +566,8 @@ class GatewayProvider(BaseProvider):
             return await self.generate_gemini_image(
                 model_name=model_name,
                 prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                image_size=quality,
                 image_inputs=image_inputs,
                 max_attempts=max_attempts,
                 retry_delay=retry_delay,
@@ -735,6 +743,8 @@ class GatewayProvider(BaseProvider):
         self,
         model_name: str,
         prompt: str,
+        aspect_ratio: str = "16:9",
+        image_size: str = "2K",
         image_inputs: Optional[List[Dict[str, str]]] = None,
         max_attempts: int = 3,
         retry_delay: float = 30,
@@ -742,7 +752,12 @@ class GatewayProvider(BaseProvider):
     ) -> List[str]:
         """通过 AIPAIBOX Gemini generateContent 端点生成图片。"""
         url = f"{self.base_url}/v1beta/models/{model_name}:generateContent"
-        payload = self._build_gemini_image_payload(prompt, image_inputs)
+        payload = self._build_gemini_image_payload(
+            prompt=prompt,
+            aspect_ratio=aspect_ratio,
+            image_size=image_size,
+            image_inputs=image_inputs,
+        )
 
         for attempt in range(max_attempts):
             try:

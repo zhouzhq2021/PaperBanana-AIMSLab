@@ -449,6 +449,10 @@ class TestImageGeneration:
         assert captured["url"] == "https://api.aipaibox.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent"
         assert captured["payload"]["contents"][0]["parts"][0]["text"] == "Test diagram"
         assert captured["payload"]["generationConfig"]["responseModalities"] == ["IMAGE"]
+        assert captured["payload"]["generationConfig"]["imageConfig"] == {
+            "aspectRatio": "21:9",
+            "imageSize": "2K",
+        }
         assert result == [image_b64]
 
 
