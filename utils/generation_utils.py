@@ -405,10 +405,16 @@ async def close_gateway_providers():
 google_base_url = get_config_val("google", "base_url", "GOOGLE_BASE_URL", "")
 google_api_version = get_config_val("google", "api_version", "GOOGLE_API_VERSION", "")
 
+_gemini_api_key_cache = ""
+_gemini_base_url_cache = ""
 
 def _create_gemini_client(api_key: str, base_url: str = "", api_version: str = ""):
     from google import genai
     from google.genai import types
+
+    global _gemini_api_key_cache, _gemini_base_url_cache
+    _gemini_api_key_cache = api_key
+    _gemini_base_url_cache = base_url
 
     http_options_kwargs = {}
     if base_url:
@@ -619,6 +625,7 @@ async def call_evolink_image_with_retry_async(
     aspect_ratio = config.get("aspect_ratio", "16:9")
     quality = config.get("quality", "2K")
     image_urls = config.get("image_urls", None)
+    image_inputs = config.get("image_inputs", None)
 
     return await gateway_provider.generate_image(
         model_name=model_name,
@@ -626,6 +633,7 @@ async def call_evolink_image_with_retry_async(
         aspect_ratio=aspect_ratio,
         quality=quality,
         image_urls=image_urls,
+        image_inputs=image_inputs,
         max_attempts=max_attempts,
         retry_delay=retry_delay,
         error_context=error_context,
@@ -658,71 +666,92 @@ async def call_gemini_with_retry_async(
 ):
     """原始 Gemini API 异步调用（保留兼容性）"""
     from google.genai import types
+    from google import genai
+    import aiohttp
 
     if gemini_client is None:
         raise RuntimeError("Gemini Client 未初始化，请检查 GOOGLE_API_KEY 配置。")
 
-    result_list = []
-    target_candidate_count = config.candidate_count
-    if config.candidate_count > 8:
-        config.candidate_count = 8
+    # 动态组装本地 Client 和 aiohttp session 避免 Streamlit 的跨 Event Loop 冲突
+    # 以及避免自带的 HTTPX 底层代理异常，同时开启 trust_env 处理本地代理。
+    connector = aiohttp.TCPConnector(limit=30)
+    custom_aio_client = aiohttp.ClientSession(connector=connector, trust_env=True)
 
-    current_contents = contents
-    for attempt in range(max_attempts):
-        try:
-            client = gemini_client
-            gemini_contents = _convert_to_gemini_parts(current_contents)
-            response = await client.aio.models.generate_content(
-                model=model_name, contents=gemini_contents, config=config
-            )
+    try:
+        http_kwargs = {}
+        if _gemini_base_url_cache:
+            http_kwargs["baseUrl"] = _gemini_base_url_cache
+        if google_api_version:
+            http_kwargs["apiVersion"] = google_api_version
+        http_kwargs["aiohttp_client"] = custom_aio_client
 
-            if "nanoviz" in model_name or "image" in model_name:
-                raw_response_list = []
-                if not response.candidates or not response.candidates[0].content.parts:
-                    current_delay = _retry_backoff_delay(
-                        retry_delay,
-                        attempt,
-                        AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY if "image" in model_name else AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY,
-                    )
-                    _debug_log(f"[Gemini] 图像响应为空，{current_delay}s 后重试")
-                    await asyncio.sleep(current_delay)
-                    continue
-                for part in response.candidates[0].content.parts:
-                    if part.inline_data:
-                        raw_response_list.append(
-                            base64.b64encode(part.inline_data.data).decode("utf-8")
+        local_client = genai.Client(
+            api_key=_gemini_api_key_cache,
+            http_options=types.HttpOptions(**http_kwargs),
+        )
+
+        result_list = []
+        target_candidate_count = config.candidate_count
+        if config.candidate_count > 8:
+            config.candidate_count = 8
+
+        current_contents = contents
+        for attempt in range(max_attempts):
+            try:
+                gemini_contents = _convert_to_gemini_parts(current_contents)
+                response = await local_client.aio.models.generate_content(
+                    model=model_name, contents=gemini_contents, config=config
+                )
+
+                if "nanoviz" in model_name or "image" in model_name:
+                    raw_response_list = []
+                    if not response.candidates or not response.candidates[0].content.parts:
+                        current_delay = _retry_backoff_delay(
+                            retry_delay,
+                            attempt,
+                            AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY if "image" in model_name else AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY,
                         )
-                        break
-            else:
-                raw_response_list = [
-                    part.text
-                    for candidate in response.candidates
-                    for part in candidate.content.parts
-                ]
-            result_list.extend([r for r in raw_response_list if r.strip() != ""])
-            if len(result_list) >= target_candidate_count:
-                result_list = result_list[:target_candidate_count]
-                break
+                        _debug_log(f"[Gemini] 图像响应为空，{current_delay}s 后重试")
+                        await asyncio.sleep(current_delay)
+                        continue
+                    for part in response.candidates[0].content.parts:
+                        if part.inline_data:
+                            raw_response_list.append(
+                                base64.b64encode(part.inline_data.data).decode("utf-8")
+                            )
+                            break
+                else:
+                    raw_response_list = [
+                        part.text
+                        for candidate in response.candidates
+                        for part in candidate.content.parts
+                    ]
+                result_list.extend([r for r in raw_response_list if r.strip() != ""])
+                if len(result_list) >= target_candidate_count:
+                    result_list = result_list[:target_candidate_count]
+                    break
 
-        except Exception as e:
-            context_msg = f" for {error_context}" if error_context else ""
-            current_delay = _retry_backoff_delay(
-                retry_delay,
-                attempt,
-                AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY if "image" in model_name else AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY,
-            )
-            _debug_log(
-                f"[Gemini] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {e}"
-            )
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(current_delay)
-            else:
-                print(f"[Gemini] {model_name} 重试 {max_attempts} 次后失败{context_msg}: {e}")
-                result_list = ["Error"] * target_candidate_count
+            except Exception as e:
+                context_msg = f" for {error_context}" if error_context else ""
+                current_delay = _retry_backoff_delay(
+                    retry_delay,
+                    attempt,
+                    AUTO_IMAGE_PROVIDER_RETRY_MAX_DELAY if "image" in model_name else AUTO_TEXT_PROVIDER_RETRY_MAX_DELAY,
+                )
+                _debug_log(
+                    f"[Gemini] Attempt {attempt + 1}/{max_attempts} for {model_name} failed{context_msg}: {e}"
+                )
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(current_delay)
+                else:
+                    print(f"[Gemini] {model_name} 重试 {max_attempts} 次后失败{context_msg}: {e}")
+                    result_list = ["Error"] * target_candidate_count
 
-    if len(result_list) < target_candidate_count:
-        result_list.extend(["Error"] * (target_candidate_count - len(result_list)))
-    return result_list
+        if len(result_list) < target_candidate_count:
+            result_list.extend(["Error"] * (target_candidate_count - len(result_list)))
+        return result_list
+    finally:
+        await custom_aio_client.close()
 
 
 # ==================== 原始 Claude/OpenAI 调用函数（保留兼容性） ====================
@@ -781,6 +810,40 @@ def _extract_openai_image_files(contents: Optional[List[Dict[str, Any]]]) -> Lis
         image_files.append(image_file)
 
     return image_files
+
+
+def _extract_gateway_image_inputs(
+    contents: Optional[List[Dict[str, Any]]],
+) -> List[Dict[str, str]]:
+    image_inputs = []
+    if not contents:
+        return image_inputs
+
+    for idx, item in enumerate(contents):
+        if item.get("type") != "image":
+            continue
+
+        source = item.get("source", {})
+        media_type = source.get("media_type", "image/jpeg")
+        image_b64 = ""
+        if source.get("type") == "base64":
+            image_b64 = source.get("data", "")
+        elif "image_base64" in item:
+            image_b64 = item.get("image_base64", "")
+
+        if not image_b64:
+            continue
+
+        suffix = "png" if "png" in media_type else "jpg"
+        image_inputs.append(
+            {
+                "data": image_b64,
+                "media_type": media_type,
+                "filename": f"input_{idx}.{suffix}",
+            }
+        )
+
+    return image_inputs
 
 
 async def _upload_content_images_to_gateway(
@@ -1220,6 +1283,7 @@ async def call_image_model_with_retry_async(
 
     if _is_auto_provider(provider_name):
         model_candidates = _image_model_candidates(model_name)
+        print(f"[自动通道] 图像请求初始模型: {model_name}, 候选顺序: {model_candidates}")
         attempted = []
         for current_model in model_candidates:
             if current_model != model_name:
@@ -1261,7 +1325,10 @@ async def call_image_model_with_retry_async(
 
     if is_gateway_provider(provider_name):
         image_urls = cfg.get("image_urls")
-        if not image_urls and contents:
+        image_inputs = []
+        if is_openai_image_model(model_name) or is_gemini_model(model_name):
+            image_inputs = _extract_gateway_image_inputs(contents)
+        elif not image_urls and contents:
             image_urls = await _upload_content_images_to_gateway(
                 contents,
                 model_name=model_name,
@@ -1277,6 +1344,7 @@ async def call_image_model_with_retry_async(
                 "aspect_ratio": gateway_size,
                 "quality": _gateway_quality_for_model(model_name, cfg),
                 "image_urls": image_urls,
+                "image_inputs": image_inputs,
             },
             max_attempts=max_attempts,
             retry_delay=retry_delay,
@@ -1314,7 +1382,7 @@ async def call_image_model_with_retry_async(
             error_context=error_context,
         )
 
-    if provider_name == "gemini" or is_gemini_model(model_name):
+    if provider_name in ("gemini", "google") or is_gemini_model(model_name):
         from google.genai import types
         gemini_contents = contents or [{"type": "text", "text": prompt}]
         return await call_gemini_with_retry_async(

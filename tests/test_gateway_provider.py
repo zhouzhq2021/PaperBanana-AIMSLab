@@ -371,6 +371,43 @@ class TestImageGeneration:
         assert result == [image_b64]
 
     @pytest.mark.asyncio
+    async def test_gpt_image_with_local_input_uses_images_edits(self):
+        """gpt-image-* edits through the gateway should use /v1/images/edits."""
+        p = make_provider(base_url="https://api.aipaibox.com")
+        image_b64 = make_png_base64()
+        response = {"data": [{"b64_json": image_b64}]}
+        captured = {}
+
+        async def capture_post(url, form, timeout=120):
+            captured["url"] = url
+            captured["form"] = form
+            captured["timeout"] = timeout
+            return response
+
+        with patch.object(p, '_post_form', side_effect=capture_post):
+            result = await p.generate_image(
+                model_name="gpt-image-2",
+                prompt="Edit this image",
+                aspect_ratio="1824x1024",
+                quality="high",
+                image_inputs=[
+                    {
+                        "data": image_b64,
+                        "media_type": "image/png",
+                        "filename": "input.png",
+                    }
+                ],
+                max_attempts=1,
+                retry_delay=0,
+                poll_interval=0,
+            )
+
+        assert captured["url"] == "https://api.aipaibox.com/v1/images/edits"
+        assert captured["timeout"] == 360
+        assert captured["form"] is not None
+        assert result == [image_b64]
+
+    @pytest.mark.asyncio
     async def test_gemini_image_uses_generate_content_endpoint(self):
         """Gemini image preview on AIPAIBOX should use Gemini generateContent endpoint."""
         p = make_provider(base_url="https://api.aipaibox.com")
@@ -547,6 +584,7 @@ class TestGenerationUtilsIntegration:
 
         assert result == ["gateway-image"]
         mock_provider.generate_image.assert_awaited_once()
+        assert mock_provider.generate_image.await_args.kwargs["image_inputs"][0]["media_type"] == "image/png"
         mock_openai_edit.assert_not_awaited()
         mock_openai_generate.assert_not_awaited()
 

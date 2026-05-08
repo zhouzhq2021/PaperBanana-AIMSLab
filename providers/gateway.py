@@ -1,6 +1,6 @@
 """
 OpenAI-compatible gateway provider.
-支持 AIPAIBOX/Evolink 等网关的文本生成、OpenAI 图像生成和 Gemini generateContent 图像生成。
+支持 AIPAIBOX/Evolink 等网关的文本生成、OpenAI-compatible 图像生成/编辑和 Gemini generateContent 图像生成。
 """
 
 import asyncio
@@ -47,7 +47,8 @@ class GatewayProvider(BaseProvider):
     OpenAI-compatible gateway provider
 
     文本模型: 通过 /v1/chat/completions (OpenAI 兼容)
-    OpenAI 图像模型: 通过 /v1/images/generations (异步任务或直接响应)
+    GPT 图像模型: 生成走 /v1/images/generations，编辑走 /v1/images/edits
+    其他 OpenAI-compatible 图像模型: 通过 /v1/images/generations
     Gemini 图像模型: 通过 /v1beta/models/{model}:generateContent
     """
 
@@ -64,7 +65,7 @@ class GatewayProvider(BaseProvider):
         """获取共享的 aiohttp session，避免每次请求都创建新 session"""
         if self._session is None or self._session.closed:
             connector = aiohttp.TCPConnector(limit=30)
-            self._session = aiohttp.ClientSession(connector=connector)
+            self._session = aiohttp.ClientSession(connector=connector, trust_env=True)
         return self._session
 
     async def close(self):
@@ -78,6 +79,9 @@ class GatewayProvider(BaseProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+
+    def _get_auth_headers(self) -> Dict[str, str]:
+        return {"Authorization": f"Bearer {self.api_key}"}
 
     # ==================== 内容格式转换 ====================
 
@@ -186,17 +190,36 @@ class GatewayProvider(BaseProvider):
             payload["image_urls"] = image_urls
         return payload
 
-    def _build_gemini_image_payload(self, prompt: str) -> Dict[str, Any]:
+    def _build_gemini_image_payload(
+        self,
+        prompt: str,
+        image_inputs: Optional[List[Dict[str, str]]] = None,
+    ) -> Dict[str, Any]:
         """构建 Gemini generateContent 图像请求体。"""
+        parts = [{"text": prompt}]
+        for image_input in image_inputs or []:
+            parts.append(
+                {
+                    "inline_data": {
+                        "mime_type": image_input.get("media_type", "image/jpeg"),
+                        "data": image_input.get("data", ""),
+                    }
+                }
+            )
         return {
             "contents": [
                 {
                     "role": "user",
-                    "parts": [{"text": prompt}],
+                    "parts": parts,
                 }
             ],
             "generationConfig": {
                 "responseModalities": ["IMAGE"],
+            },
+            "tool_config": {
+                "function_calling_config": {
+                    "mode": "NONE"
+                }
             },
         }
 
@@ -220,6 +243,27 @@ class GatewayProvider(BaseProvider):
                 error_msg = body.get("error", body) if isinstance(body, dict) else body
                 print(f"[API Gateway] HTTP {status}: {error_msg}")
                 # 4xx 客户端错误不重试，直接抛出特定异常
+                if 400 <= status < 500 and status != 429:
+                    raise ClientError(f"HTTP {status}: {error_msg}")
+            resp.raise_for_status()
+            return body
+
+    async def _post_form(self, url: str, form: aiohttp.FormData, timeout: float = 120) -> Dict[str, Any]:
+        """发送 multipart/form-data 请求并返回 JSON 响应。"""
+        _debug_log(f"[DEBUG] [API Gateway] POST form {url}")
+        session = await self._get_session()
+        async with session.post(
+            url,
+            data=form,
+            headers=self._get_auth_headers(),
+            timeout=aiohttp.ClientTimeout(total=timeout),
+        ) as resp:
+            status = resp.status
+            body = await resp.json()
+            _debug_log(f"[DEBUG] [API Gateway]   form 响应 status={status}, keys={list(body.keys()) if isinstance(body, dict) else type(body)}")
+            if status >= 400:
+                error_msg = body.get("error", body) if isinstance(body, dict) else body
+                print(f"[API Gateway] HTTP {status}: {error_msg}")
                 if 400 <= status < 500 and status != 429:
                     raise ClientError(f"HTTP {status}: {error_msg}")
             resp.raise_for_status()
@@ -268,7 +312,7 @@ class GatewayProvider(BaseProvider):
 
         image_url = first_item.get("url")
         if image_url:
-            return await self._download_image_as_base64(image_url)
+            return await self._extract_image_from_value(image_url)
 
         return None
 
@@ -326,6 +370,50 @@ class GatewayProvider(BaseProvider):
                 return await self._download_image_as_base64(value)
 
         return None
+
+    def _decode_image_input_data(self, image_data: str) -> bytes:
+        if not image_data:
+            return b""
+        normalized = image_data.strip()
+        if normalized.lower().startswith("data:image") and "," in normalized:
+            normalized = normalized.split(",", 1)[1]
+        normalized = "".join(normalized.split())
+        padding = len(normalized) % 4
+        if padding:
+            normalized += "=" * (4 - padding)
+        return base64.b64decode(normalized)
+
+    def _build_gpt_image_edit_form(
+        self,
+        model_name: str,
+        prompt: str,
+        aspect_ratio: str,
+        quality: str,
+        image_inputs: List[Dict[str, str]],
+    ) -> aiohttp.FormData:
+        """构建 OpenAI-compatible /v1/images/edits multipart 表单。"""
+        form = aiohttp.FormData()
+        form.add_field("model", model_name)
+        form.add_field("prompt", prompt)
+        form.add_field("size", aspect_ratio)
+        form.add_field("quality", quality)
+
+        for idx, image_input in enumerate(image_inputs):
+            media_type = image_input.get("media_type", "image/jpeg")
+            filename = image_input.get("filename") or (
+                f"input_{idx}.png" if "png" in media_type else f"input_{idx}.jpg"
+            )
+            image_bytes = self._decode_image_input_data(image_input.get("data", ""))
+            if not image_bytes:
+                continue
+            form.add_field(
+                "image",
+                image_bytes,
+                filename=filename,
+                content_type=media_type,
+            )
+
+        return form
 
     # ==================== 文件上传 ====================
 
@@ -447,6 +535,7 @@ class GatewayProvider(BaseProvider):
         aspect_ratio: str = "16:9",
         quality: str = "2K",
         image_urls: Optional[List[str]] = None,
+        image_inputs: Optional[List[Dict[str, str]]] = None,
         max_attempts: int = 3,
         retry_delay: float = 30,
         poll_interval: float = 3,
@@ -454,32 +543,42 @@ class GatewayProvider(BaseProvider):
         error_context: str = "",
     ) -> List[str]:
         """
-        通过 /v1/images/generations 异步生成图像
+        生成图像。
 
-        流程：
-        1. POST 创建任务，获取 task_id
-        2. GET 轮询任务状态直到完成
-        3. 下载图片 URL 并转换为 base64
+        AIPAIBOX Gemini 图像模型走 /v1beta/models/{model}:generateContent。
+        gpt-image-* 文本生图走 /v1/images/generations，图像编辑走 /v1/images/edits。
+        其他兼容图像模型保留 /v1/images/generations 异步任务流程。
         """
         create_url = f"{self.base_url}/v1/images/generations"
         _debug_log(f"[DEBUG] [API Gateway 图像] 请求: model={model_name}, ratio={aspect_ratio}, quality={quality}")
         if image_urls:
             _debug_log(f"[DEBUG] [API Gateway 图像]   附带 {len(image_urls)} 张参考图片")
+        if image_inputs:
+            _debug_log(f"[DEBUG] [API Gateway 图像]   附带 {len(image_inputs)} 张本地参考图片")
         _debug_log(f"[DEBUG] [API Gateway 图像]   prompt 长度={len(prompt)}, 前100字: {prompt[:100]}...")
         if _is_gemini_image_model(model_name):
             return await self.generate_gemini_image(
                 model_name=model_name,
                 prompt=prompt,
+                image_inputs=image_inputs,
                 max_attempts=max_attempts,
                 retry_delay=retry_delay,
                 error_context=error_context,
             )
 
-        if _is_gpt_image_model(model_name):
-            max_polls = max(max_polls, int(GPT_IMAGE_GATEWAY_TIMEOUT / max(poll_interval, 1)))
-            request_timeout = GPT_IMAGE_GATEWAY_TIMEOUT
-        else:
-            request_timeout = 120
+        if _is_gpt_image_model(model_name) and image_inputs:
+            return await self.generate_gpt_image_edit(
+                model_name=model_name,
+                prompt=prompt,
+                aspect_ratio=aspect_ratio,
+                quality=quality,
+                image_inputs=image_inputs,
+                max_attempts=max_attempts,
+                retry_delay=retry_delay,
+                error_context=error_context,
+            )
+
+        request_timeout = GPT_IMAGE_GATEWAY_TIMEOUT if _is_gpt_image_model(model_name) else None
 
         for attempt in range(max_attempts):
             try:
@@ -491,12 +590,10 @@ class GatewayProvider(BaseProvider):
                     quality=quality,
                     image_urls=image_urls,
                 )
-                if _is_gpt_image_model(model_name):
-                    create_response = await self._post_json(
-                        create_url, payload, timeout=request_timeout
-                    )
-                else:
+                if request_timeout is None:
                     create_response = await self._post_json(create_url, payload)
+                else:
+                    create_response = await self._post_json(create_url, payload, timeout=request_timeout)
                 task_id = create_response.get("id")
 
                 if not task_id:
@@ -578,17 +675,74 @@ class GatewayProvider(BaseProvider):
 
         return ["Error"]
 
+    async def generate_gpt_image_edit(
+        self,
+        model_name: str,
+        prompt: str,
+        aspect_ratio: str,
+        quality: str,
+        image_inputs: Optional[List[Dict[str, str]]] = None,
+        max_attempts: int = 3,
+        retry_delay: float = 30,
+        error_context: str = "",
+    ) -> List[str]:
+        """通过 OpenAI-compatible /v1/images/edits 调用 gpt-image-* 图像编辑。"""
+        url = f"{self.base_url}/v1/images/edits"
+        image_inputs = image_inputs or []
+
+        for attempt in range(max_attempts):
+            try:
+                form = self._build_gpt_image_edit_form(
+                    model_name=model_name,
+                    prompt=prompt,
+                    aspect_ratio=aspect_ratio,
+                    quality=quality,
+                    image_inputs=image_inputs,
+                )
+                response = await self._post_form(url, form, timeout=GPT_IMAGE_GATEWAY_TIMEOUT)
+                image = await self._extract_direct_image_response(response)
+                if image:
+                    print("[API Gateway GPT 图像] images/edits 返回图像结果")
+                    return [image]
+
+                print("[API Gateway GPT 图像] images/edits 未返回图像结果，等待后重试")
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(
+                        _retry_backoff_delay(retry_delay, attempt, IMAGE_RETRY_MAX_DELAY)
+                    )
+
+            except ClientError as e:
+                context_msg = f" ({error_context})" if error_context else ""
+                print(f"[API Gateway GPT 图像] images/edits 客户端错误{context_msg}: {e}。不再重试。")
+                return ["Error"]
+
+            except Exception as e:
+                context_msg = f" ({error_context})" if error_context else ""
+                current_delay = _retry_backoff_delay(retry_delay, attempt, IMAGE_RETRY_MAX_DELAY)
+                if DEBUG_LOGS:
+                    print(
+                        f"[API Gateway GPT 图像] images/edits 第 {attempt + 1} 次尝试失败{context_msg}: {e}。"
+                        f"{current_delay}s 后重试..."
+                    )
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(current_delay)
+                else:
+                    print(f"[API Gateway GPT 图像] images/edits 全部 {max_attempts} 次尝试失败{context_msg}")
+
+        return ["Error"]
+
     async def generate_gemini_image(
         self,
         model_name: str,
         prompt: str,
+        image_inputs: Optional[List[Dict[str, str]]] = None,
         max_attempts: int = 3,
         retry_delay: float = 30,
         error_context: str = "",
     ) -> List[str]:
         """通过 AIPAIBOX Gemini generateContent 端点生成图片。"""
         url = f"{self.base_url}/v1beta/models/{model_name}:generateContent"
-        payload = self._build_gemini_image_payload(prompt)
+        payload = self._build_gemini_image_payload(prompt, image_inputs)
 
         for attempt in range(max_attempts):
             try:

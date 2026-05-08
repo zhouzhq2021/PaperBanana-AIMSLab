@@ -48,6 +48,7 @@ class BaseProvider(ABC):
         aspect_ratio: str = "16:9",
         quality: str = "2K",
         image_urls: Optional[List[str]] = None,
+        image_inputs: Optional[List[Dict[str, str]]] = None,
         max_attempts: int = 5,
         retry_delay: float = 30,
         poll_interval: float = 3,
@@ -62,6 +63,7 @@ class BaseProvider(ABC):
             aspect_ratio: 宽高比
             quality: 图像质量/分辨率
             image_urls: 参考图片 URL 列表（用于 image-to-image）
+            image_inputs: 本地参考图片数据列表（用于 OpenAI-compatible image edit）
             max_attempts: 最大重试次数
             retry_delay: 重试间隔（秒）
             poll_interval: 轮询间隔（秒）

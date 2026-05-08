@@ -28,6 +28,19 @@ import sys
 import os
 from datetime import datetime
 
+def run_async(coro):
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    return loop.run_until_complete(coro)
+
 # 将项目根目录添加到路径
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -62,6 +75,8 @@ try:
             val = model_config_data[section].get(key)
         return val or default
 
+    PROVIDER_OPTIONS = ["auto", "google", "aipaibox", "evolink"]
+
 except ImportError as e:
     print(f"调试：导入错误：{e}")
     import traceback
@@ -93,9 +108,8 @@ def base64_to_image(b64_str):
     if not b64_str:
         return None
     try:
-        if "," in b64_str:
-            b64_str = b64_str.split(",")[1]
-        image_data = base64.b64decode(b64_str)
+        from utils.image_utils import image_bytes_from_base64
+        image_data = image_bytes_from_base64(b64_str)
         return Image.open(BytesIO(image_data))
     except Exception:
         return None
@@ -271,7 +285,7 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
 
     return results
 
-async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9", image_size="2K", api_keys=None, provider="auto"):
+async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9", image_size="2K", api_keys=None, provider="auto", image_model="gpt-image-2"):
     """
     使用自动 API 通道精修图像，支持 AIPAIBOX/Evolink、Gemini 和 OpenAI。
 
@@ -281,7 +295,8 @@ async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9
         aspect_ratio: 输出宽高比 (21:9, 16:9, 3:2)
         image_size: 输出分辨率 (2K 或 4K)
         api_keys: 各通道 API 密钥
-        provider: 固定为 "auto"，保留参数用于兼容
+        provider: 优先 API 提供商
+        image_model: 图像模型名称
 
     返回：
         元组 (编辑后的图像字节数据, 成功消息)
@@ -314,39 +329,47 @@ async def refine_image_with_nanoviz(image_bytes, edit_prompt, aspect_ratio="21:9
         if openai_key:
             generation_utils.init_openai_client(openai_key)
 
-        image_model = st.session_state.get("tab1_image_model_name", "gemini-3.1-flash-image-preview")
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        result = await generation_utils.call_image_model_with_retry_async(
-            provider=provider,
-            model_name=image_model,
-            prompt=edit_prompt,
-            contents=[
-                {"type": "text", "text": edit_prompt},
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": image_b64,
+        try:
+            result = await generation_utils.call_image_model_with_retry_async(
+                provider=provider,
+                model_name=image_model,
+                prompt=edit_prompt,
+                contents=[
+                    {"type": "text", "text": edit_prompt},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/jpeg",
+                            "data": image_b64,
+                        },
                     },
+                ],
+                config={
+                    "aspect_ratio": aspect_ratio,
+                    "quality": image_size,
+                    "gateway_quality": image_size,
+                    "openai_quality": "high",
+                    "output_format": "png",
+                    "image_size": image_size,
                 },
-            ],
-            config={
-                "aspect_ratio": aspect_ratio,
-                "quality": image_size,
-                "gateway_quality": image_size,
-                "openai_quality": "high",
-                "output_format": "png",
-                "image_size": image_size,
-            },
-            max_attempts=3,
-            retry_delay=10,
-        )
+                max_attempts=3,
+                retry_delay=10,
+            )
 
-        if result and result[0] and result[0] != "Error":
-            return base64.b64decode(result[0]), "✅ 图像精修成功！"
+            if result and result[0] and result[0] != "Error":
+                from utils.image_utils import image_bytes_from_base64
+                return image_bytes_from_base64(result[0]), "✅ 图像精修成功！"
 
-        return None, "❌ 图像精修失败，所有可用通道均未返回有效图像数据"
+            return None, "❌ 图像精修失败，所有可用通道均未返回有效图像数据"
+        finally:
+            if hasattr(generation_utils, "close_gateway_providers"):
+                await generation_utils.close_gateway_providers()
+            elif generation_utils.evolink_provider and hasattr(generation_utils.evolink_provider, 'close'):
+                await generation_utils.evolink_provider.close()
+            # 延迟一下给 asyncio 机会清理抛出的 SSL 没接住的 exception
+            await asyncio.sleep(0.1)
 
     except Exception as e:
         return None, f"❌ 错误：{str(e)}"
@@ -579,12 +602,13 @@ def main():
             )
 
             image_model_name = _model_selectbox_with_custom(
-                "图像模型",
+                "候选生成图像模型",
                 IMAGE_MODEL_OPTIONS,
                 key="tab1_image_model_name",
                 default_value=default_image_model,
-                help_text="用于图像生成/精修。系统会自动选择可用通道。"
+                help_text="用于“生成候选方案”标签页的图像生成。系统会自动选择可用通道。"
             )
+            st.caption(f"本次候选生成将使用图像模型：`{image_model_name}`")
 
             st.caption("API 通道自动选择；发生超时、返回 Error 或初始化失败时会尝试下一个可用通道。")
 
@@ -626,7 +650,20 @@ def main():
                     help="兼容旧配置；未填写 AIPAIBOX key 时才会作为网关通道使用"
                 )
 
-            provider = "auto"
+            provider = st.selectbox(
+                "优先 API 提供商",
+                PROVIDER_OPTIONS,
+                index=0,
+                key="tab1_provider",
+                help="选择优先使用的通道（auto: 自动选择/备用, google: 官方Gemini, aipaibox: 代理网关）",
+                format_func=lambda x: {
+                    "auto": "Auto (自动回退)",
+                    "google": "Google (官方 Gemini)",
+                    "aipaibox": "AIPAIBOX (代理网关)",
+                    "evolink": "Evolink (兼容网关)",
+                }[x]
+            )
+
             api_keys = {
                 "aipaibox": aipaibox_legacy_api_key,
                 "aipaibox_gemini": aipaibox_gemini_api_key,
@@ -745,6 +782,11 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
             if not method_content or not caption:
                 st.error("请同时提供方法内容和图注！")
             else:
+                print(
+                    f"[Demo UI] 生成候选方案：provider={provider}, "
+                    f"text_model={model_name}, image_model={image_model_name}"
+                )
+                st.info(f"本次候选生成使用图像模型：`{image_model_name}`")
                 # 保存到会话状态
                 st.session_state["method_content"] = method_content
                 st.session_state["caption"] = caption
@@ -761,7 +803,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
 
                     # 并行处理
                     try:
-                        results = asyncio.run(process_parallel_candidates(
+                        results = run_async(process_parallel_candidates(
                             input_data_list,
                             exp_mode=exp_mode,
                             retrieval_setting=retrieval_setting,
@@ -902,6 +944,20 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
         with st.sidebar:
             st.title("✨ 精修设置")
 
+            refine_provider = st.selectbox(
+                "优先 API 提供商",
+                PROVIDER_OPTIONS,
+                index=0,
+                key="tab2_provider",
+                help="自动：按配置文件选择；Google：官方Gemini；AIPAIBOX：网关直连",
+                format_func=lambda x: {
+                    "auto": "Auto (自动回退)",
+                    "google": "Google (官方 Gemini)",
+                    "aipaibox": "AIPAIBOX (代理网关)",
+                    "evolink": "Evolink (兼容网关)",
+                }[x]
+            )
+
             refine_resolution = st.selectbox(
                 "目标分辨率",
                 ["2K", "4K"],
@@ -917,6 +973,15 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                 key="refine_aspect_ratio",
                 help="精修图像的宽高比"
             )
+
+            refine_image_model_name = _model_selectbox_with_custom(
+                "精修图像模型",
+                IMAGE_MODEL_OPTIONS,
+                key="tab2_image_model_name",
+                default_value=get_config_val("defaults", "image_model_name", "PAPERBANANA_IMAGE_MODEL_NAME", "gpt-image-2"),
+                help_text="用于“精修图像”标签页。系统会自动选择可用通道。"
+            )
+            st.caption(f"本次精修将使用图像模型：`{refine_image_model_name}`")
 
         st.divider()
 
@@ -956,15 +1021,24 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                                 # 将 PIL 图像转换为字节
                                 image_bytes = image_to_jpeg_bytes(uploaded_image)
 
+                                # 获取当前选择的图像模型
+                                current_image_model = refine_image_model_name
+                                print(
+                                    f"[Demo UI] 精修图像：provider={refine_provider}, "
+                                    f"image_model={current_image_model}"
+                                )
+                                st.info(f"本次精修使用图像模型：`{current_image_model}`")
+
                                 # 调用精修 API
-                                refined_bytes, message = asyncio.run(
+                                refined_bytes, message = run_async(
                                     refine_image_with_nanoviz(
                                         image_bytes=image_bytes,
                                         edit_prompt=edit_prompt,
                                         aspect_ratio=refine_aspect_ratio,
                                         image_size=refine_resolution,
                                         api_keys=api_keys,
-                                        provider=provider,
+                                        provider=refine_provider,
+                                        image_model=current_image_model,
                                     )
                                 )
 
@@ -972,7 +1046,6 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                                     st.session_state["refined_image"] = refined_bytes
                                     st.session_state["refine_timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                                     st.success(message)
-                                    st.rerun()
                                 else:
                                     st.error(message)
                             except Exception as e:

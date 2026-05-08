@@ -21,6 +21,30 @@ import io
 from PIL import Image
 
 
+def normalize_image_base64(image_b64_str: str) -> str:
+    """Return raw image base64 without data URL prefix and with valid padding."""
+    if not image_b64_str:
+        return ""
+
+    normalized = image_b64_str.strip()
+    if "," in normalized and normalized.lower().startswith("data:image"):
+        normalized = normalized.split(",", 1)[1]
+
+    normalized = "".join(normalized.split())
+    padding = len(normalized) % 4
+    if padding:
+        normalized += "=" * (4 - padding)
+    return normalized
+
+
+def image_bytes_from_base64(image_b64_str: str) -> bytes:
+    """Decode image base64 returned by providers into raw bytes."""
+    normalized = normalize_image_base64(image_b64_str)
+    if not normalized:
+        return b""
+    return base64.b64decode(normalized)
+
+
 def convert_png_b64_to_jpg_b64(png_b64_str: str) -> str:
     """
     Convert a PNG base64 string to a JPG base64 string.
@@ -36,7 +60,7 @@ def convert_png_b64_to_jpg_b64(png_b64_str: str) -> str:
             print(f"⚠️  Invalid base64 string (too short): {png_b64_str[:50] if png_b64_str else 'None'}")
             return None
             
-        img = Image.open(io.BytesIO(base64.b64decode(png_b64_str))).convert("RGB")
+        img = Image.open(io.BytesIO(image_bytes_from_base64(png_b64_str))).convert("RGB")
         out_io = io.BytesIO()
         img.save(out_io, format="JPEG", quality=95)
         return base64.b64encode(out_io.getvalue()).decode("utf-8")
