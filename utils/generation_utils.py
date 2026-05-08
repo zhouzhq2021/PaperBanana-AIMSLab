@@ -150,6 +150,15 @@ def is_openai_image_model(model_name: str = "") -> bool:
     return (model_name or "").lower().startswith("gpt-image")
 
 
+def _looks_like_openai_api_key(api_key: str = "") -> bool:
+    key = (api_key or "").strip()
+    if not key:
+        return False
+    if key.startswith(("sk-ant-", "AIza", "AIzaSy")):
+        return False
+    return True
+
+
 def _is_auto_provider(provider: str = "") -> bool:
     return _normalize_provider(provider) in {"", AUTO_PROVIDER}
 
@@ -167,7 +176,7 @@ def _is_provider_available(provider: str, kind: str, model_name: str = "") -> bo
     if provider_name == "gemini":
         return gemini_client is not None
     if provider_name == "openai":
-        return openai_client is not None
+        return openai_client is not None and _looks_like_openai_api_key(openai_api_key)
     if provider_name == "anthropic":
         return kind == "text" and anthropic_client is not None
     return False
@@ -188,6 +197,24 @@ def _mark_provider_unhealthy(provider: str, kind: str, model_name: str = "", rea
     reason_msg = f": {reason}" if reason else ""
     print(
         f"[自动通道] 暂停 {kind} 组合 {model_name}@{provider_name} "
+        f"{AUTO_PROVIDER_COOLDOWN_SECONDS}s{reason_msg}"
+    )
+
+
+def _mark_provider_unhealthy_with_context(
+    provider: str,
+    kind: str,
+    model_name: str = "",
+    reason: str = "",
+    error_context: str = "",
+):
+    provider_name = _normalize_provider(provider)
+    _provider_unhealthy_until[(provider_name, kind, model_name)] = (
+        time.monotonic() + AUTO_PROVIDER_COOLDOWN_SECONDS
+    )
+    reason_msg = f": {reason}" if reason else ""
+    print(
+        f"[自动通道]{_context_suffix(error_context)} 暂停 {kind} 组合 {model_name}@{provider_name} "
         f"{AUTO_PROVIDER_COOLDOWN_SECONDS}s{reason_msg}"
     )
 
@@ -487,7 +514,7 @@ if anthropic_api_key:
 
 openai_api_key = get_config_val("api_keys", "openai_api_key", "OPENAI_API_KEY", "")
 openai_base_url = get_config_val("openai", "base_url", "OPENAI_BASE_URL", "")
-if openai_api_key:
+if openai_api_key and _looks_like_openai_api_key(openai_api_key):
     try:
         from openai import AsyncOpenAI
         openai_kwargs = {"api_key": openai_api_key}
@@ -500,12 +527,22 @@ if openai_api_key:
             print("已初始化 OpenAI Client")
     except ImportError:
         print("警告：未安装 openai，OpenAI Client 不可用。")
+elif openai_api_key:
+    openai_api_key = ""
+    print("警告：配置中的 OpenAI API Key 看起来不是 OpenAI key，已跳过 OpenAI 官方通道。")
 
 
 def init_openai_client(api_key: str, base_url: str = ""):
     """用指定的 API Key 初始化或更新 OpenAI Client（供界面动态传入）。"""
-    global openai_client
+    global openai_client, openai_api_key
     if not api_key:
+        openai_client = None
+        openai_api_key = ""
+        return
+    if not _looks_like_openai_api_key(api_key):
+        openai_client = None
+        openai_api_key = ""
+        print("警告：OpenAI API Key 看起来不是 OpenAI key，已跳过 OpenAI 官方通道。")
         return
     try:
         from openai import AsyncOpenAI
@@ -514,6 +551,7 @@ def init_openai_client(api_key: str, base_url: str = ""):
         if url:
             openai_kwargs["base_url"] = url
         openai_client = AsyncOpenAI(**openai_kwargs)
+        openai_api_key = api_key
         if url:
             print(f"已通过界面初始化 OpenAI Client (base_url={url})")
         else:
@@ -1323,10 +1361,10 @@ async def call_image_model_with_retry_async(
                         print(f"[自动通道]{context_suffix} 图像模型 {current_model} 使用 {candidate} 成功")
                         return result
                     print(f"[自动通道]{context_suffix} 图像组合 {current_model}@{candidate} 重试后仍失败")
-                    _mark_provider_unhealthy(candidate, "image", current_model, "返回 Error")
+                    _mark_provider_unhealthy_with_context(candidate, "image", current_model, "返回 Error", error_context)
                 except Exception as e:
                     print(f"[自动通道]{context_suffix} 图像组合 {current_model}@{candidate} 异常，尝试下一通道")
-                    _mark_provider_unhealthy(candidate, "image", current_model, str(e)[:120])
+                    _mark_provider_unhealthy_with_context(candidate, "image", current_model, str(e)[:120], error_context)
 
         print(f"[自动通道]{context_suffix} 图像模型和通道均失败，已尝试: {attempted}")
         return ["Error"]
