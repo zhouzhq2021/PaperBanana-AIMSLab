@@ -449,6 +449,57 @@ class TestImageGeneration:
         assert captured["url"] == "https://api.aipaibox.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent"
         assert captured["payload"]["contents"][0]["parts"][0]["text"] == "Test diagram"
         assert captured["payload"]["generationConfig"]["responseModalities"] == ["IMAGE"]
+        assert "imageConfig" not in captured["payload"]["generationConfig"]
+        assert result == [image_b64]
+
+    @pytest.mark.asyncio
+    async def test_gemini_image_config_is_opt_in_for_refine(self):
+        """Gemini image size/ratio is only sent when the refine path opts in."""
+        p = make_provider(base_url="https://api.aipaibox.com")
+        image_b64 = make_png_base64()
+        response = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {
+                                "inline_data": {
+                                    "mime_type": "image/png",
+                                    "data": image_b64,
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+        captured = {}
+
+        async def capture_post(url, payload, timeout=120):
+            captured["url"] = url
+            captured["payload"] = payload
+            return response
+
+        with patch.object(p, '_post_json', side_effect=capture_post):
+            result = await p.generate_image(
+                model_name="gemini-3.1-flash-image-preview",
+                prompt="Refine diagram",
+                aspect_ratio="21:9",
+                quality="2K",
+                image_inputs=[
+                    {
+                        "data": image_b64,
+                        "media_type": "image/png",
+                        "filename": "input.png",
+                    }
+                ],
+                max_attempts=1,
+                retry_delay=0,
+                poll_interval=0,
+                gemini_image_config=True,
+            )
+
+        assert captured["url"] == "https://api.aipaibox.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent"
         assert captured["payload"]["generationConfig"]["imageConfig"] == {
             "aspectRatio": "21:9",
             "imageSize": "2K",

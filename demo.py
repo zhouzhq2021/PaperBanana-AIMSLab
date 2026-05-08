@@ -363,6 +363,7 @@ async def refine_image_with_nanoviz(
                     "openai_quality": "high",
                     "output_format": "png",
                     "image_size": image_size,
+                    "gemini_image_config": True,
                 },
                 max_attempts=3,
                 retry_delay=10,

@@ -193,8 +193,8 @@ class GatewayProvider(BaseProvider):
     def _build_gemini_image_payload(
         self,
         prompt: str,
-        aspect_ratio: str = "16:9",
-        image_size: str = "2K",
+        aspect_ratio: Optional[str] = None,
+        image_size: Optional[str] = None,
         image_inputs: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """构建 Gemini generateContent 图像请求体。"""
@@ -208,6 +208,17 @@ class GatewayProvider(BaseProvider):
                     }
                 }
             )
+        generation_config = {
+            "responseModalities": ["IMAGE"],
+        }
+        if aspect_ratio or image_size:
+            image_config = {}
+            if aspect_ratio:
+                image_config["aspectRatio"] = aspect_ratio
+            if image_size:
+                image_config["imageSize"] = image_size
+            generation_config["imageConfig"] = image_config
+
         return {
             "contents": [
                 {
@@ -215,13 +226,7 @@ class GatewayProvider(BaseProvider):
                     "parts": parts,
                 }
             ],
-            "generationConfig": {
-                "responseModalities": ["IMAGE"],
-                "imageConfig": {
-                    "aspectRatio": aspect_ratio,
-                    "imageSize": image_size,
-                },
-            },
+            "generationConfig": generation_config,
             "tool_config": {
                 "function_calling_config": {
                     "mode": "NONE"
@@ -547,6 +552,7 @@ class GatewayProvider(BaseProvider):
         poll_interval: float = 3,
         max_polls: int = 60,
         error_context: str = "",
+        gemini_image_config: bool = False,
     ) -> List[str]:
         """
         生成图像。
@@ -566,8 +572,8 @@ class GatewayProvider(BaseProvider):
             return await self.generate_gemini_image(
                 model_name=model_name,
                 prompt=prompt,
-                aspect_ratio=aspect_ratio,
-                image_size=quality,
+                aspect_ratio=aspect_ratio if gemini_image_config else None,
+                image_size=quality if gemini_image_config else None,
                 image_inputs=image_inputs,
                 max_attempts=max_attempts,
                 retry_delay=retry_delay,
@@ -743,8 +749,8 @@ class GatewayProvider(BaseProvider):
         self,
         model_name: str,
         prompt: str,
-        aspect_ratio: str = "16:9",
-        image_size: str = "2K",
+        aspect_ratio: Optional[str] = None,
+        image_size: Optional[str] = None,
         image_inputs: Optional[List[Dict[str, str]]] = None,
         max_attempts: int = 3,
         retry_delay: float = 30,

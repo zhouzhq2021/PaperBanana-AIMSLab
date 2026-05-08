@@ -680,6 +680,7 @@ async def call_evolink_image_with_retry_async(
         max_attempts=max_attempts,
         retry_delay=retry_delay,
         error_context=error_context,
+        gemini_image_config=bool(config.get("gemini_image_config")),
     )
 
 
@@ -1391,6 +1392,7 @@ async def call_image_model_with_retry_async(
                 "quality": _gateway_quality_for_model(model_name, cfg),
                 "image_urls": image_urls,
                 "image_inputs": image_inputs,
+                "gemini_image_config": cfg.get("gemini_image_config", False),
             },
             max_attempts=max_attempts,
             retry_delay=retry_delay,
