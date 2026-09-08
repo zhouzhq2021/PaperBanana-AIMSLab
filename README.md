@@ -1,5 +1,7 @@
 # PaperBanana-AIMSLab 学术配图助手 🍌
 
+[![Powered by OrcaRouter](https://img.shields.io/badge/Powered_by-OrcaRouter-2563eb)](https://www.orcarouter.ai/ref/ref_5910a46d3ffe3ae64c25)
+
 AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动生成高质量学术配图。
 
 [![GitHub stars](https://img.shields.io/github/stars/zhouzhq2021/PaperBanana-AIMSLab?style=social)](https://github.com/zhouzhq2021/PaperBanana-AIMSLab/stargazers)
@@ -9,6 +11,8 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 > 本项目最初是为支持 **AIMSLab** 在论文配图生成中的实际使用需求而开发，现在整理为面向更广泛科研用户的中文增强版本。项目基于开源项目 [PaperBanana](https://github.com/dwzhu-pku/PaperBanana)（[论文](https://huggingface.co/papers/2601.23265)）优化而来，重点改进国内可用性、多 API 通道容错和交互体验。
 
 默认 API 网关已配置为 `https://api.aipaibox.com`，同时保留 Google Gemini 官方 endpoint、OpenAI 官方 API 和兼容网关通道。
+
+本项目支持通过 [OrcaRouter](https://www.orcarouter.ai/ref/ref_5910a46d3ffe3ae64c25) 使用统一模型网关。
 
 ![示例效果](assets/teaser_figure.jpg)
 
