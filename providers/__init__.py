@@ -10,19 +10,22 @@ def create_provider(provider_name: str, **kwargs) -> BaseProvider:
     工厂函数：根据名称创建 provider 实例
 
     Args:
-        provider_name: 提供商名称 ("aipaibox"、"gateway"、"evolink" 等)
+        provider_name: 提供商名称 ("aipaibox"、"orcarouter"、"gateway"、"evolink" 等)
         **kwargs: 传递给 provider 构造函数的参数
 
     Returns:
         BaseProvider 实例
     """
     normalized_name = provider_name.lower()
-    if normalized_name in {"aipaibox", "evolink", "gateway"}:
+    if normalized_name in {"aipaibox", "evolink", "orcarouter", "gateway"}:
         from .gateway import GatewayProvider
+        if normalized_name == "orcarouter":
+            kwargs.setdefault("base_url", "https://api.orcarouter.ai/v1")
+            kwargs.setdefault("wire_api", "responses")
         return GatewayProvider(**kwargs)
 
-    if normalized_name not in {"aipaibox", "evolink", "gateway"}:
+    if normalized_name not in {"aipaibox", "evolink", "orcarouter", "gateway"}:
         raise ValueError(
             f"未知的 provider: {provider_name}。"
-            "可用的 provider: ['aipaibox', 'evolink', 'gateway']"
+            "可用的 provider: ['aipaibox', 'evolink', 'orcarouter', 'gateway']"
         )

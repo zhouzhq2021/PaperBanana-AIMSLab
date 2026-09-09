@@ -113,16 +113,17 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 
 | 模式 | 说明 | 网络要求 |
 |------|------|---------|
-| **AIPAIBOX**（默认） | `https://api.aipaibox.com`，OpenAI-compatible 国内网关 | 无需翻墙 |
+| **AIPAIBOX** | `https://api.aipaibox.com`，OpenAI-compatible 国内网关 | 无需翻墙 |
 | **Google Gemini** | Google 官方 Gemini endpoint | 需要科学上网 |
 | **OpenAI** | OpenAI 官方 API，支持文本模型和 `gpt-image-2` | 需要可访问 OpenAI |
 | **Evolink** | 兼容旧配置的国内 API 代理 | 无需翻墙 |
+| **OrcaRouter** | `https://api.orcarouter.ai/v1`，OpenAI Responses API 兼容网关 | 取决于本地网络 |
 
 在界面侧边栏选择文本模型和图像模型即可；系统会根据可用 API Key 自动选择通道，遇到超时或返回 `Error` 时会尝试切换到下一条可用通道。
 
 图像模型在网关侧会自动区分端点：`gpt-image-2` 文本生图使用 OpenAI-compatible `/v1/images/generations`，带输入图精修使用 `/v1/images/edits`，`gemini-3.1-flash-image-preview` 使用 Gemini `/v1beta/models/{model}:generateContent`，避免不同模型误打到错误接口。
 
-> **说明**：本工具与 AIPAIBOX/Evolink 无任何商业关联，仅作为内置的国内可用 API 方案提供。项目采用 Provider 抽象架构（见 `providers/` 目录），你可以自行集成任何兼容 OpenAI 接口的 API 服务商。
+> **说明**：本工具与 AIPAIBOX/Evolink/OrcaRouter 无任何商业关联，仅作为内置的 API 方案提供。项目采用 Provider 抽象架构（见 `providers/` 目录），你可以自行集成任何兼容 OpenAI 接口的 API 服务商。
 
 ---
 
@@ -137,6 +138,8 @@ AI 驱动的学术论文配图生成工具 — 粘贴论文方法章节，自动
 如需使用 OpenAI 文本模型或 `gpt-image-2`，填写 `api_keys.openai_api_key`，并在界面下拉框选择对应模型。
 
 如需通过中转访问 Google 或 OpenAI，可在 `configs/model_config.yaml` 中配置 `google.base_url` 或 `openai.base_url`。
+
+如需使用 OrcaRouter，设置环境变量 `ORCA_KEY=sk-orca-...`，在界面中选择文本模型 `orcarouter/auto` 和提供商 `OrcaRouter`。也可以在 `configs/model_config.yaml` 的 `orcarouter.api_key` 中填写密钥；默认配置使用 `https://api.orcarouter.ai/v1` 和 `responses` 协议。
 
 ### 第二步：启动程序
 

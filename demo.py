@@ -75,7 +75,7 @@ try:
             val = model_config_data[section].get(key)
         return val or default
 
-    PROVIDER_OPTIONS = ["auto", "google", "aipaibox", "evolink"]
+    PROVIDER_OPTIONS = ["auto", "google", "aipaibox", "evolink", "orcarouter"]
 
 except ImportError as e:
     print(f"调试：导入错误：{e}")
@@ -159,6 +159,7 @@ TEXT_MODEL_OPTIONS = [
     "gpt-5.5",
     "gpt-5.4",
     "gemini-2.5-flash",
+    "orcarouter/auto",
     "自定义...",
 ]
 
@@ -217,6 +218,7 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
     aipaibox_gemini_key = api_keys.get("aipaibox_gemini", "")
     aipaibox_openai_key = api_keys.get("aipaibox_openai", "")
     evolink_key = api_keys.get("evolink", "")
+    orcarouter_key = api_keys.get("orcarouter", "")
     google_key = api_keys.get("google", "")
     openai_key = api_keys.get("openai", "")
 
@@ -232,13 +234,19 @@ async def process_parallel_candidates(data_list, exp_mode="dev_planner_critic", 
             evolink_key,
             base_url=get_config_val("evolink", "base_url", "EVOLINK_BASE_URL", "https://api.evolink.ai"),
         )
+    if orcarouter_key:
+        generation_utils.init_orcarouter_provider(
+            orcarouter_key,
+            base_url=get_config_val("orcarouter", "base_url", "ORCAROUTER_BASE_URL", "https://api.orcarouter.ai/v1"),
+            wire_api=get_config_val("orcarouter", "wire_api", "ORCAROUTER_WIRE_API", "responses"),
+        )
 
     if google_key:
         generation_utils.init_gemini_client(google_key)
     if openai_key:
         generation_utils.init_openai_client(openai_key)
 
-    if not any([aipaibox_key, aipaibox_gemini_key, aipaibox_openai_key, evolink_key, google_key, openai_key]):
+    if not any([aipaibox_key, aipaibox_gemini_key, aipaibox_openai_key, evolink_key, orcarouter_key, google_key, openai_key]):
         print("[DEBUG] ⚠️ 未提供 API Key，将仅使用配置文件/环境变量中已初始化的通道")
 
     # 创建实验配置
@@ -319,6 +327,7 @@ async def refine_image_with_nanoviz(
         aipaibox_gemini_key = api_keys.get("aipaibox_gemini", "")
         aipaibox_openai_key = api_keys.get("aipaibox_openai", "")
         evolink_key = api_keys.get("evolink", "")
+        orcarouter_key = api_keys.get("orcarouter", "")
         google_key = api_keys.get("google", "")
         openai_key = api_keys.get("openai", "")
 
@@ -333,6 +342,12 @@ async def refine_image_with_nanoviz(
             generation_utils.init_evolink_provider(
                 evolink_key,
                 base_url=get_config_val("evolink", "base_url", "EVOLINK_BASE_URL", "https://api.evolink.ai"),
+            )
+        if orcarouter_key:
+            generation_utils.init_orcarouter_provider(
+                orcarouter_key,
+                base_url=get_config_val("orcarouter", "base_url", "ORCAROUTER_BASE_URL", "https://api.orcarouter.ai/v1"),
+                wire_api=get_config_val("orcarouter", "wire_api", "ORCAROUTER_WIRE_API", "responses"),
             )
         if google_key:
             generation_utils.init_gemini_client(google_key)
@@ -661,6 +676,13 @@ def main():
                     value=get_config_val("evolink", "api_key", "EVOLINK_API_KEY", ""),
                     help="兼容旧配置；未填写 AIPAIBOX key 时才会作为网关通道使用"
                 )
+                orcarouter_api_key = st.text_input(
+                    "OrcaRouter API Key",
+                    type="password",
+                    key="tab1_orcarouter_api_key",
+                    value=get_config_val("orcarouter", "api_key", "ORCA_KEY", ""),
+                    help="用于 https://api.orcarouter.ai/v1 的 Responses API（模型示例：orcarouter/auto）"
+                )
 
             provider = st.selectbox(
                 "优先 API 提供商",
@@ -673,6 +695,7 @@ def main():
                     "google": "Google (官方 Gemini)",
                     "aipaibox": "AIPAIBOX (代理网关)",
                     "evolink": "Evolink (兼容网关)",
+                    "orcarouter": "OrcaRouter (Responses 网关)",
                 }[x]
             )
 
@@ -683,6 +706,7 @@ def main():
                 "google": google_api_key,
                 "openai": openai_api_key,
                 "evolink": evolink_api_key,
+                "orcarouter": orcarouter_api_key,
             }
 
         st.divider()
@@ -967,6 +991,7 @@ The framework extends to statistical plots by adjusting the Visualizer and Criti
                     "google": "Google (官方 Gemini)",
                     "aipaibox": "AIPAIBOX (代理网关)",
                     "evolink": "Evolink (兼容网关)",
+                    "orcarouter": "OrcaRouter (Responses 网关)",
                 }[x]
             )
 

@@ -17,8 +17,9 @@
 # Default Models
 defaults:
   # Text model for Retriever/Planner/Stylist/Critic and plot-code generation.
-  # Examples: "gemini-2.5-flash", "gpt-5.5", "gpt-5.4"
-  model_name: "gpt-5.5"
+  # Examples: "gemini-2.5-flash", "gpt-5.5", "gpt-5.4", "orcarouter/auto"
+  model_name: "orcarouter/auto"
+  model_provider: "orcarouter"
   # Image model for diagram generation/polishing.
   # Examples: "gemini-3.1-flash-image-preview", "gpt-image-2"
   image_model_name: "gpt-image-2"
@@ -43,6 +44,15 @@ aipaibox:
 evolink:
   api_key: ""
   base_url: "https://api.evolink.ai"
+
+# OrcaRouter OpenAI-compatible gateway (Responses API).
+# Prefer setting the ORCA_KEY environment variable instead of storing a key here.
+orcarouter:
+  name: "OrcaRouter"
+  api_key: ""
+  env_key: "ORCA_KEY"
+  base_url: "https://api.orcarouter.ai/v1"
+  wire_api: "responses"
 
 # Google Gemini endpoint（可选，支持代理/中转）
 # Leave base_url empty to use the official Google Gemini endpoint.

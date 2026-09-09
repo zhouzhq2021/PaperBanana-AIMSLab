@@ -51,6 +51,15 @@ class TestGatewayProviderInit:
         assert headers["Authorization"] == "Bearer sk-test"
         assert headers["Content-Type"] == "application/json"
 
+    def test_orcarouter_base_url_and_wire_api(self):
+        p = GatewayProvider(
+            api_key="sk-orca-test",
+            base_url="https://api.orcarouter.ai/v1",
+            wire_api="responses",
+        )
+        assert p._v1_url("responses") == "https://api.orcarouter.ai/v1/responses"
+        assert p.wire_api == "responses"
+
 
 # ==================== 内容格式转换测试 ====================
 
@@ -121,6 +130,67 @@ class TestContentConversion:
 # ==================== 文本生成测试 ====================
 
 class TestTextGeneration:
+    @pytest.mark.asyncio
+    async def test_responses_api_generation_success(self):
+        p = GatewayProvider(
+            api_key="sk-orca-test",
+            base_url="https://api.orcarouter.ai/v1",
+            wire_api="responses",
+        )
+        mock_response = {
+            "output": [
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Orca response"}],
+                }
+            ]
+        }
+
+        with patch.object(p, "_post_json", new_callable=AsyncMock, return_value=mock_response) as post:
+            result = await p.generate_text(
+                model_name="orcarouter/auto",
+                contents=[{"type": "text", "text": "Hello"}],
+                system_prompt="Be helpful",
+                temperature=0.7,
+                max_output_tokens=1000,
+            )
+
+        assert result == ["Orca response"]
+        url, payload = post.await_args.args
+        assert url == "https://api.orcarouter.ai/v1/responses"
+        assert payload["model"] == "orcarouter/auto"
+        assert payload["max_output_tokens"] == 1000
+        assert payload["input"][0]["role"] == "system"
+        assert payload["input"][0]["content"][0] == {
+            "type": "input_text",
+            "text": "Be helpful",
+        }
+
+    def test_responses_payload_converts_image_input(self):
+        p = GatewayProvider(api_key="test", wire_api="responses")
+        payload = p._build_responses_payload(
+            model_name="orcarouter/auto",
+            contents=[
+                {"type": "text", "text": "Describe"},
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "abc123",
+                    },
+                },
+            ],
+            system_prompt="",
+            temperature=1.0,
+            max_output_tokens=100,
+        )
+        image_part = payload["input"][0]["content"][1]
+        assert image_part == {
+            "type": "input_image",
+            "image_url": "data:image/png;base64,abc123",
+        }
+
     @pytest.mark.asyncio
     async def test_text_generation_success(self):
         p = make_provider()
@@ -560,6 +630,18 @@ class TestRequestBuilding:
 # ==================== generation_utils 集成测试 ====================
 
 class TestGenerationUtilsIntegration:
+    def test_orcarouter_model_only_uses_orcarouter_candidate(self):
+        from utils import generation_utils
+
+        assert generation_utils._text_provider_candidates("orcarouter/auto") == ["orcarouter"]
+
+    def test_orcarouter_factory_defaults(self):
+        from providers import create_provider
+
+        provider = create_provider("orcarouter", api_key="sk-orca-test")
+        assert provider.base_url == "https://api.orcarouter.ai/v1"
+        assert provider.wire_api == "responses"
+
     def test_auto_retry_defaults_are_more_patient_for_images(self):
         """Image generation gets more attempts and longer retry delay by default."""
         from utils import generation_utils

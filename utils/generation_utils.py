@@ -59,7 +59,7 @@ def get_first_config_val(*lookups, default=""):
     return default
 
 
-GATEWAY_PROVIDERS = {"aipaibox", "evolink", "gateway"}
+GATEWAY_PROVIDERS = {"aipaibox", "evolink", "orcarouter", "gateway"}
 AUTO_PROVIDER = "auto"
 OPENAI_IMAGE_QUALITIES = {"standard", "hd", "low", "medium", "high", "auto"}
 DEBUG_LOGS = os.getenv("PAPERBANANA_DEBUG", "").lower() in {"1", "true", "yes", "on"}
@@ -234,6 +234,8 @@ def _dedupe(seq: List[str]) -> List[str]:
 
 
 def _text_provider_candidates(model_name: str) -> List[str]:
+    if (model_name or "").lower().startswith("orcarouter/"):
+        return ["orcarouter"]
     if is_gemini_model(model_name):
         return _dedupe(["aipaibox", "gemini"])
     if is_openai_text_model(model_name):
@@ -294,6 +296,7 @@ def _extract_text_config(config) -> Dict[str, Any]:
 evolink_provider = None
 aipaibox_providers: Dict[str, Any] = {}
 legacy_gateway_provider = None
+orcarouter_provider = None
 
 
 def _gateway_family_for_model(model_name: str = "") -> str:
@@ -309,6 +312,7 @@ def _first_gateway_provider():
         aipaibox_providers.get("default")
         or aipaibox_providers.get("gemini")
         or aipaibox_providers.get("openai")
+        or orcarouter_provider
         or legacy_gateway_provider
     )
 
@@ -332,14 +336,20 @@ def _resolve_gateway_provider(provider: str = "gateway", model_name: str = ""):
         return aipaibox_providers.get(family) or aipaibox_providers.get("default")
     if provider_name == "evolink":
         return legacy_gateway_provider
+    if provider_name == "orcarouter":
+        return orcarouter_provider
     if provider_name == "gateway":
-        return _resolve_gateway_provider("aipaibox", model_name) or legacy_gateway_provider
+        return (
+            _resolve_gateway_provider("aipaibox", model_name)
+            or orcarouter_provider
+            or legacy_gateway_provider
+        )
     return None
 
 
-def _new_gateway_provider(api_key: str, base_url: str):
+def _new_gateway_provider(api_key: str, base_url: str, wire_api: str = "chat_completions"):
     from providers.gateway import GatewayProvider
-    return GatewayProvider(api_key=api_key, base_url=base_url)
+    return GatewayProvider(api_key=api_key, base_url=base_url, wire_api=wire_api)
 
 aipaibox_base_url = get_config_val(
     "aipaibox", "base_url", "AIPAIBOX_BASE_URL", "https://api.aipaibox.com"
@@ -359,6 +369,11 @@ legacy_evolink_api_key = get_config_val("evolink", "api_key", "EVOLINK_API_KEY",
 legacy_gateway_base_url = get_config_val(
     "evolink", "base_url", "EVOLINK_BASE_URL", "https://api.evolink.ai"
 )
+orcarouter_api_key = get_config_val("orcarouter", "api_key", "ORCA_KEY", "")
+orcarouter_base_url = get_config_val(
+    "orcarouter", "base_url", "ORCAROUTER_BASE_URL", "https://api.orcarouter.ai/v1"
+)
+orcarouter_wire_api = get_config_val("orcarouter", "wire_api", "ORCAROUTER_WIRE_API", "responses")
 
 try:
     if aipaibox_api_key:
@@ -369,17 +384,25 @@ try:
         aipaibox_providers["openai"] = _new_gateway_provider(aipaibox_openai_api_key, aipaibox_base_url)
     if legacy_evolink_api_key:
         legacy_gateway_provider = _new_gateway_provider(legacy_evolink_api_key, legacy_gateway_base_url)
+    if orcarouter_api_key:
+        orcarouter_provider = _new_gateway_provider(
+            orcarouter_api_key,
+            orcarouter_base_url,
+            wire_api=orcarouter_wire_api,
+        )
     _refresh_gateway_alias()
     if aipaibox_providers:
         configured_families = ", ".join(sorted(aipaibox_providers.keys()))
         print(f"已初始化 AIPAIBOX Gateway Provider ({configured_families}, base_url={aipaibox_base_url})")
     if legacy_gateway_provider:
         print(f"已初始化 Evolink Gateway Provider (base_url={legacy_gateway_base_url})")
+    if orcarouter_provider:
+        print(f"已初始化 OrcaRouter Provider (base_url={orcarouter_base_url}, wire_api={orcarouter_wire_api})")
 except ImportError:
     print("警告：未安装 aiohttp，API Gateway Provider 不可用。请运行 pip install aiohttp")
 
 if not _first_gateway_provider():
-    print("警告：未配置 AIPAIBOX/EVOLINK API Key，API Gateway Provider 不可用。")
+    print("警告：未配置 AIPAIBOX/EVOLINK/ORCA_KEY，API Gateway Provider 不可用。")
 
 
 def init_evolink_provider(api_key: str, base_url: str = ""):
@@ -394,6 +417,24 @@ def init_evolink_provider(api_key: str, base_url: str = ""):
         print(f"已通过界面初始化 Evolink Gateway Provider (base_url={url})")
     except ImportError:
         print("警告：未安装 aiohttp，API Gateway Provider 不可用。请运行 pip install aiohttp")
+
+
+def init_orcarouter_provider(
+    api_key: str,
+    base_url: str = "",
+    wire_api: str = "responses",
+):
+    """Initialize OrcaRouter's OpenAI-compatible Responses API endpoint."""
+    global orcarouter_provider
+    if not api_key:
+        return
+    url = base_url or orcarouter_base_url
+    try:
+        orcarouter_provider = _new_gateway_provider(api_key, url, wire_api=wire_api)
+        _refresh_gateway_alias()
+        print(f"已通过界面初始化 OrcaRouter Provider (base_url={url}, wire_api={wire_api})")
+    except ImportError:
+        print("警告：未安装 aiohttp，OrcaRouter Provider 不可用。请运行 pip install aiohttp")
 
 
 def init_aipaibox_provider(
@@ -426,7 +467,7 @@ def init_aipaibox_provider(
 async def close_gateway_providers():
     """Close all initialized gateway sessions once a Streamlit run finishes."""
     seen = set()
-    providers = [*aipaibox_providers.values(), legacy_gateway_provider]
+    providers = [*aipaibox_providers.values(), legacy_gateway_provider, orcarouter_provider]
     for provider in providers:
         if provider is None or id(provider) in seen or not hasattr(provider, "close"):
             continue
@@ -584,7 +625,7 @@ async def call_evolink_text_with_retry_async(
     if gateway_provider is None:
         raise RuntimeError(
             "API Gateway Provider 未初始化，请检查 AIPAIBOX_GEMINI_API_KEY/"
-            "AIPAIBOX_OPENAI_API_KEY/EVOLINK_API_KEY 配置。"
+            "AIPAIBOX_OPENAI_API_KEY/EVOLINK_API_KEY/ORCA_KEY 配置。"
         )
 
     # 从 config 中提取参数（兼容 types.GenerateContentConfig 和 dict）
@@ -632,7 +673,7 @@ async def upload_image_to_evolink(
     if gateway_provider is None:
         raise RuntimeError(
             "API Gateway Provider 未初始化，请检查 AIPAIBOX_GEMINI_API_KEY/"
-            "AIPAIBOX_OPENAI_API_KEY/EVOLINK_API_KEY 配置。"
+            "AIPAIBOX_OPENAI_API_KEY/EVOLINK_API_KEY/ORCA_KEY 配置。"
         )
     url = await gateway_provider.upload_image_base64(image_b64, media_type)
     if not url:
@@ -662,7 +703,7 @@ async def call_evolink_image_with_retry_async(
     if gateway_provider is None:
         raise RuntimeError(
             "API Gateway Provider 未初始化，请检查 AIPAIBOX_GEMINI_API_KEY/"
-            "AIPAIBOX_OPENAI_API_KEY/EVOLINK_API_KEY 配置。"
+            "AIPAIBOX_OPENAI_API_KEY/EVOLINK_API_KEY/ORCA_KEY 配置。"
         )
 
     aspect_ratio = config.get("aspect_ratio", "16:9")

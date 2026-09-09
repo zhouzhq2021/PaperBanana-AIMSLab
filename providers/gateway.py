@@ -1,6 +1,6 @@
 """
 OpenAI-compatible gateway provider.
-支持 AIPAIBOX/Evolink 等网关的文本生成、OpenAI-compatible 图像生成/编辑和 Gemini generateContent 图像生成。
+支持 AIPAIBOX/Evolink/OrcaRouter 等网关的文本生成、OpenAI-compatible 图像生成/编辑和 Gemini generateContent 图像生成。
 """
 
 import asyncio
@@ -46,7 +46,7 @@ class GatewayProvider(BaseProvider):
     """
     OpenAI-compatible gateway provider
 
-    文本模型: 通过 /v1/chat/completions (OpenAI 兼容)
+    文本模型: 通过 /v1/chat/completions 或 /v1/responses (OpenAI 兼容)
     GPT 图像模型: 生成走 /v1/images/generations，编辑走 /v1/images/edits
     其他 OpenAI-compatible 图像模型: 通过 /v1/images/generations
     Gemini 图像模型: 通过 /v1beta/models/{model}:generateContent
@@ -56,10 +56,19 @@ class GatewayProvider(BaseProvider):
         self,
         api_key: str,
         base_url: str = "https://api.aipaibox.com",
+        wire_api: str = "chat_completions",
     ):
         self.api_key = api_key
         self.base_url = base_url.rstrip("/")
+        self.wire_api = (wire_api or "chat_completions").strip().lower()
         self._session: Optional[aiohttp.ClientSession] = None
+
+    def _v1_url(self, path: str) -> str:
+        """Build a v1 endpoint without duplicating an already-suffixed /v1 base URL."""
+        path = path.lstrip("/")
+        if self.base_url.endswith("/v1"):
+            return f"{self.base_url}/{path}"
+        return f"{self.base_url}/v1/{path}"
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """获取共享的 aiohttp session，避免每次请求都创建新 session"""
@@ -170,6 +179,59 @@ class GatewayProvider(BaseProvider):
             "temperature": temperature,
             "max_tokens": max_output_tokens,
         }
+
+    def _build_responses_payload(
+        self,
+        model_name: str,
+        contents: List[Dict[str, Any]],
+        system_prompt: str,
+        temperature: float,
+        max_output_tokens: int,
+    ) -> Dict[str, Any]:
+        """Build an OpenAI Responses API request from the project's common content format."""
+        messages = self._convert_contents_to_messages(contents, system_prompt)
+        response_input = []
+        for message in messages:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                content = [{"type": "input_text", "text": content}]
+            else:
+                converted = []
+                for part in content or []:
+                    if part.get("type") == "text":
+                        converted.append({"type": "input_text", "text": part.get("text", "")})
+                    elif part.get("type") == "image_url":
+                        image_url = part.get("image_url", {})
+                        url = image_url.get("url", "") if isinstance(image_url, dict) else image_url
+                        converted.append({"type": "input_image", "image_url": url})
+                content = converted
+            response_input.append({"role": message.get("role", "user"), "content": content})
+        return {
+            "model": model_name,
+            "input": response_input,
+            "temperature": temperature,
+            "max_output_tokens": max_output_tokens,
+        }
+
+    def _extract_responses_text(self, response: Dict[str, Any]) -> str:
+        """Extract text from Responses API output, including SDK-compatible variants."""
+        output_text = response.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return output_text
+        for item in response.get("output", []) or []:
+            if not isinstance(item, dict):
+                continue
+            for content in item.get("content", []) or []:
+                if not isinstance(content, dict):
+                    continue
+                text = content.get("text")
+                if isinstance(text, str) and text.strip():
+                    return text
+        # A few OpenAI-compatible gateways return Chat Completions-shaped data.
+        choices = response.get("choices", [])
+        if choices and isinstance(choices[0], dict):
+            return choices[0].get("message", {}).get("content", "") or ""
+        return ""
 
     def _build_image_payload(
         self,
@@ -479,18 +541,26 @@ class GatewayProvider(BaseProvider):
         error_context: str = "",
     ) -> List[str]:
         """
-        通过 /v1/chat/completions 生成文本
-
-        兼容 OpenAI Chat Completions API 格式
+        通过配置的 OpenAI Chat Completions 或 Responses API 生成文本。
         """
-        url = f"{self.base_url}/v1/chat/completions"
-        payload = self._build_text_payload(
-            model_name=model_name,
-            contents=contents,
-            system_prompt=system_prompt,
-            temperature=temperature,
-            max_output_tokens=max_output_tokens,
-        )
+        if self.wire_api in {"responses", "response"}:
+            url = self._v1_url("responses")
+            payload = self._build_responses_payload(
+                model_name=model_name,
+                contents=contents,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
+        else:
+            url = self._v1_url("chat/completions")
+            payload = self._build_text_payload(
+                model_name=model_name,
+                contents=contents,
+                system_prompt=system_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens,
+            )
 
         # 计算内容摘要
         content_types = [item.get("type", "?") for item in contents]
@@ -503,13 +573,15 @@ class GatewayProvider(BaseProvider):
                 response = await self._post_json(url, payload)
 
                 # 提取文本响应
-                choices = response.get("choices", [])
-                if choices:
-                    text = choices[0].get("message", {}).get("content", "")
-                    if text.strip():
-                        usage = response.get("usage", {})
-                        _debug_log(f"[DEBUG] [API Gateway 文本] ✓ 成功, 响应长度={len(text)}, usage={usage}")
-                        return [text]
+                if self.wire_api in {"responses", "response"}:
+                    text = self._extract_responses_text(response)
+                else:
+                    choices = response.get("choices", [])
+                    text = choices[0].get("message", {}).get("content", "") if choices else ""
+                if isinstance(text, str) and text.strip():
+                    usage = response.get("usage", {})
+                    _debug_log(f"[DEBUG] [API Gateway 文本] ✓ 成功, 响应长度={len(text)}, usage={usage}")
+                    return [text]
 
                 if attempt < max_attempts - 1:
                     await asyncio.sleep(
@@ -561,7 +633,7 @@ class GatewayProvider(BaseProvider):
         gpt-image-* 文本生图走 /v1/images/generations，图像编辑走 /v1/images/edits。
         其他兼容图像模型保留 /v1/images/generations 异步任务流程。
         """
-        create_url = f"{self.base_url}/v1/images/generations"
+        create_url = self._v1_url("images/generations")
         _debug_log(f"[DEBUG] [API Gateway 图像] 请求: model={model_name}, ratio={aspect_ratio}, quality={quality}")
         if image_urls:
             _debug_log(f"[DEBUG] [API Gateway 图像]   附带 {len(image_urls)} 张参考图片")
@@ -626,7 +698,7 @@ class GatewayProvider(BaseProvider):
                 _debug_log(f"[API Gateway 图像] 任务已创建: {task_id}")
 
                 # 步骤 2：轮询任务状态
-                poll_url = f"{self.base_url}/v1/tasks/{task_id}"
+                poll_url = self._v1_url(f"tasks/{task_id}")
                 for poll_count in range(max_polls):
                     if poll_interval > 0:
                         await asyncio.sleep(poll_interval)
@@ -701,7 +773,7 @@ class GatewayProvider(BaseProvider):
         error_context: str = "",
     ) -> List[str]:
         """通过 OpenAI-compatible /v1/images/edits 调用 gpt-image-* 图像编辑。"""
-        url = f"{self.base_url}/v1/images/edits"
+        url = self._v1_url("images/edits")
         image_inputs = image_inputs or []
 
         for attempt in range(max_attempts):

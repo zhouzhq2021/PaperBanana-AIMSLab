@@ -92,7 +92,7 @@ async def main():
         "--provider",
         type=str,
         default="auto",
-        choices=["auto", "aipaibox", "evolink", "gateway", "gemini", "openai", "anthropic"],
+        choices=["auto", "aipaibox", "evolink", "orcarouter", "gateway", "gemini", "openai", "anthropic"],
         help="API provider/channel to use (default: auto)",
     )
     args = parser.parse_args()
